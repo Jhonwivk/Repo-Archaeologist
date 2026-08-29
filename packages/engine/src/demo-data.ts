@@ -34,7 +34,7 @@ function hydrateDemo(raw: any): RepositoryAnalysis {
     ...e,
     fromSnapshotId: e.fromSnapshotId || deltas[i]?.fromSnapshotId || snapshots[0]?.id || '',
     toSnapshotId: e.toSnapshotId || deltas[i]?.toSnapshotId || snapshots[snapshots.length - 1]?.id || '',
-    changedFiles: e.changedFiles ?? ['src/index.ts'],
+    changedFiles: e.changedFiles?.length ? e.changedFiles : (deltas[i]?.changedFiles ?? []),
     confidence: e.confidence ?? 0.9,
     evidence: e.evidence.map((ev: any) => ({
       ...ev,
