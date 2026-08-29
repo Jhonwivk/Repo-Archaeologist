@@ -14,6 +14,20 @@ export interface GitFileEntry {
   type: 'blob' | 'tree';
 }
 
+export interface GitRename {
+  from: string;
+  to: string;
+  score: number;
+}
+
+export interface NameStatus {
+  added: string[];
+  deleted: string[];
+  modified: string[];
+  renamed: GitRename[];
+  files: string[];
+}
+
 export interface GitAnalyzer {
   clone(url: string, targetPath: string): Promise<void>;
   open(repoPath: string): Promise<void>;
@@ -23,6 +37,7 @@ export interface GitAnalyzer {
   getFilesAtCommit(commit: string): Promise<GitFileEntry[]>;
   getFileContentAtCommit(commit: string, filePath: string): Promise<string | null>;
   getDiffStats(fromCommit: string, toCommit: string): Promise<{ files: string[]; insertions: number; deletions: number }>;
+  getNameStatus(fromCommit: string, toCommit: string): Promise<NameStatus>;
   cleanup(): Promise<void>;
 }
 
@@ -31,4 +46,6 @@ export const DEFAULT_ANALYZE_OPTIONS: Required<AnalyzeOptions> = {
   minDaysBetweenSnapshots: 30,
   includeHighImpactCommits: true,
   clusterWindowDays: 14,
+  maxCommits: 400,
+  cloneDepth: 400,
 };

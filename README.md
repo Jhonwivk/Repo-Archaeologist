@@ -3,136 +3,103 @@
 > **Archify tells you what the system is.**
 > **Repo Archaeologist tells you how it became that way.**
 
-Reconstruct the architectural evolution of any GitHub repository. Convert thousands of low-level commits into grounded, interactive **Evolution Events** — and drag through time to watch your system's architecture emerge, split, and migrate.
+Reconstruct the architectural evolution of a GitHub repository. Convert thousands of low-level commits into grounded **Evolution Events**, then open one to see **Before / After**, module genealogy, and the commits that prove the claim.
 
-## What it does
+**Demo path:** paste a repo → pick a major evolution event → inspect how the system changed, which modules split or moved, and which real commits/files support that conclusion.
 
-Given a GitHub repo URL, Repo Archaeologist:
+## V1.1 scope
 
-1. **Scans** Git history — commits, branches, file changes
-2. **Selects** architecturally significant commits (time sampling + high-impact detection)
-3. **Builds** architecture snapshots at each key point (modules, dependencies, symbols)
-4. **Detects** structural deltas — added, removed, moved, split, merged modules
-5. **Clusters** related commits into **Evolution Events** with semantic summaries
-6. **Renders** an interactive timeline you can drag, scrub, and replay
+V1.1 is optimized for **TypeScript/JavaScript repositories and monorepos**.
 
-## V1 Scope
+It does **not** yet claim reliable support for Python, Go, Rust, or other languages. Those will land later behind a `LanguageAdapter`.
 
-```
-Git Repo → Important Commits → Architecture Snapshots → Evolution Events → Interactive Timeline
-```
+Current accuracy target (synthetic Evolution Lab fixture):
 
-This V1 focuses on **Architecture Evolution** — the most visually compelling layer. Future versions will add Module Genealogy, Code Symbol Evolution, and PR/Issue integration.
+| Metric | Target |
+|--------|--------|
+| Module precision | ≥ 85% |
+| Important event recall | ≥ 75% |
+| Every event linked to commit/file evidence | 100% |
 
-## Quick Start
+## Quick start
 
 ```bash
-# Install dependencies
 npm install
+npm test          # builds first, then runs unit + fixture e2e tests
+npm run dev       # API on :3001, UI on :5173
+```
 
-# Build all packages
+Open [http://localhost:5173](http://localhost:5173):
+
+1. Click **Evolution Lab** for a labeled add / move / split / merge repo
+2. Click **Agent Runtime** for the narrative architecture story
+3. Or paste a public `github.com/owner/repo` TypeScript URL
+
+Production-style (API serves the built UI):
+
+```bash
 npm run build
-
-# Start dev server (API + Web UI)
-npm run dev
+npm start         # http://localhost:3001
 ```
 
-Open [http://localhost:5173](http://localhost:5173) and click **"try the interactive demo"** to see a pre-built agent-runtime evolution story.
-
-Or paste any public GitHub repo URL to analyze it live.
-
-## Architecture
+## How it works
 
 ```
-                 Git Repository
-                       │
-                       ▼
-                Repository Scanner
-                       │
-       ┌───────────────┼───────────────┐
-       ▼               ▼               ▼
- Git Analyzer      Code Analyzer     (Future: Docs)
-       │               │               │
-       └───────────────┼───────────────┘
-                       ▼
-                  Snapshot Builder
-                       │
-                       ▼
-                 Change Detector
-                       │
-                       ▼
-               Event Clustering Engine
-                       │
-                       ▼
-                 Evolution Graph
-                       │
-                       ▼
-                 Interactive UI
+Git history
+  → important commits
+  → TS/JS architecture snapshots (compiler API + workspace packages)
+  → identity-stable deltas (add / move / rename / split / merge)
+  → evolution events with evidence
+  → interactive Before/After time machine
 ```
 
-### Packages
+Deterministic pieces do the structural work: Git diffs, rename detection, TypeScript AST, tsconfig path aliases, workspace package names, module fingerprints.
 
-| Package | Description |
-|---------|-------------|
-| `@repo-archaeologist/core` | IR types: Snapshot, EvolutionEvent, ModuleEvolution |
-| `@repo-archaeologist/engine` | Git analysis, snapshot building, change detection, event clustering |
-| `@repo-archaeologist/server` | Express API for repo analysis |
-| `@repo-archaeologist/web` | React UI with timeline, architecture graph, replay |
+LLM interpretation is intentionally **not** in V1.1. If the underlying events are wrong, generated prose would only make them look more convincing.
 
-### Core IR
+## What you can inspect
 
-The engine produces a deterministic intermediate representation:
+- **Before / After** for a selected Evolution Event
+- **Stable graph layout** so unchanged modules stay put while you scrub time
+- **Module genealogy** (click a node): born, moved, split, merged, removed
+- **Evidence**: supporting commits, changed files, dependency changes, confidence
+- **Replay** the repository as a short architecture documentary
 
-```typescript
-RepositoryAnalysis {
-  snapshots: Snapshot[]           // Architecture at key commits
-  deltas: SnapshotDelta[]         // Structural changes between snapshots
-  evolutionEvents: EvolutionEvent[]  // Clustered semantic events
-  moduleEvolutions: ModuleEvolution[]  // Module genealogy
-  timeline: TimelinePoint[]      // Interactive timeline data
-}
-```
+## Packages
 
-**EvolutionEvent** is the core abstraction — not individual commits:
+| Package | Role |
+|---------|------|
+| `@repo-archaeologist/core` | IR: Snapshot, EvolutionEvent, ModuleEvolution |
+| `@repo-archaeologist/engine` | Git + TS/JS analysis, identity, eval fixture |
+| `@repo-archaeologist/server` | API, featured cases, analysis limits |
+| `@repo-archaeologist/web` | Timeline, Before/After, genealogy |
 
-```json
-{
-  "event": "Agent split into Planner + Executor",
-  "type": "module_split",
-  "period": "2024-07-01 → 2024-08-17",
-  "commits": 11,
-  "affected_modules": ["agent", "planner", "executor", "runtime"],
-  "evidence": [
-    "Split Agent into Planner + Executor (d4e5f6a)",
-    "38 files changed across 11 commits"
-  ]
-}
-```
+## Limits (live analysis)
 
-## Design Philosophy
+Live GitHub analysis is capped so the demo stays usable:
 
-- **Deterministic first**: Git diff, AST parsing, dependency graphs, module metrics — all computed programmatically
-- **LLM for semantics** (future): Commit clustering, change interpretation, "why did this happen" synthesis
-- **Evolution Events over commits**: Real engineering changes span multiple commits; cluster them
-- **Demo-driven**: The draggable timeline + architecture graph is the hero feature
+- Shallow clone depth 400
+- Max 400 commits scanned
+- 2 concurrent jobs
+- ~3 minute timeout
+
+Featured cases are precomputed / generated locally and open immediately.
+
+## Accuracy notes
+
+Move / split / merge are emitted only when Git renames or file-level overlap support them. A new directory that merely *looks* similar to an existing module is classified as **added**, not a split.
+
+Python/Go/Rust files are ignored in V1.1.
 
 ## API
 
 ```
-GET  /api/demo                          Pre-built demo analysis
-POST /api/analyze  { url }              Start repo analysis
-GET  /api/analyze/:id/progress          Poll analysis progress
-GET  /api/analyze/:id                   Get completed analysis
-```
-
-## Development
-
-```bash
-# Run tests
-npm test
-
-# Analyze a repo from CLI (after build)
-npm run analyze -w @repo-archaeologist/engine -- https://github.com/owner/repo
+GET  /api/health
+GET  /api/cases                      Featured demos
+GET  /api/cases/:id                  demo | evolution-lab
+POST /api/analyze  { url }           Start GitHub analysis
+GET  /api/analyze/:id/progress
+GET  /api/analyze/:id
 ```
 
 ## License

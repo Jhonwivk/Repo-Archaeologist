@@ -1,7 +1,66 @@
-import type { RepositoryAnalysis } from '@repo-archaeologist/core';
+import type { ModuleNode, RepositoryAnalysis, SnapshotDelta, EvolutionEvent, ModuleEvolution } from '@repo-archaeologist/core';
+import { computeStableLayout } from './layout.js';
+
+function fillModule(m: any): ModuleNode {
+  return {
+    ...m,
+    pathId: m.pathId ?? m.path,
+    files: m.files?.length ? m.files : [`${m.path}/index.ts`],
+  };
+}
+
+function hydrateDemo(raw: any): RepositoryAnalysis {
+  const snapshots = raw.snapshots.map((s: any) => ({
+    ...s,
+    modules: s.modules.map(fillModule),
+  }));
+  const deltas: SnapshotDelta[] = raw.deltas.map((d: any) => ({
+    ...d,
+    added: d.added.map(fillModule),
+    removed: d.removed.map(fillModule),
+    moved: d.moved.map((mv: any) => ({
+      module: mv.module,
+      moduleId: mv.moduleId ?? mv.module,
+      from: mv.from,
+      to: mv.to,
+      confidence: mv.confidence ?? 0.9,
+    })),
+    renamed: d.renamed ?? [],
+    splits: d.splits ?? [],
+    merges: d.merges ?? [],
+    changedFiles: d.changedFiles ?? [],
+  }));
+  const evolutionEvents: EvolutionEvent[] = raw.evolutionEvents.map((e: any, i: number) => ({
+    ...e,
+    fromSnapshotId: e.fromSnapshotId || deltas[i]?.fromSnapshotId || snapshots[0]?.id || '',
+    toSnapshotId: e.toSnapshotId || deltas[i]?.toSnapshotId || snapshots[snapshots.length - 1]?.id || '',
+    changedFiles: e.changedFiles ?? ['src/index.ts'],
+    confidence: e.confidence ?? 0.9,
+    evidence: e.evidence.map((ev: any) => ({
+      ...ev,
+      commit: ev.commit ?? e.endCommit,
+      url: ev.url ?? `https://github.com/example/agent-runtime/commit/${e.endCommit}`,
+    })),
+  }));
+  const moduleEvolutions: ModuleEvolution[] = raw.moduleEvolutions.map((m: any) => ({
+    ...m,
+    moduleId: m.moduleId ?? `src-${m.module}`,
+    path: m.path ?? `src/${m.module}`,
+  }));
+
+  return {
+    ...raw,
+    language: raw.language ?? 'typescript',
+    snapshots,
+    deltas,
+    evolutionEvents,
+    moduleEvolutions,
+    layout: Object.keys(raw.layout ?? {}).length ? raw.layout : computeStableLayout(snapshots),
+  };
+}
 
 /** Pre-built demo analysis showcasing Repo Archaeologist capabilities */
-export const demoAnalysis: RepositoryAnalysis = {
+const rawDemo = {
   id: 'demo-agent-runtime',
   url: 'https://github.com/example/agent-runtime',
   name: 'agent-runtime',
@@ -176,6 +235,8 @@ export const demoAnalysis: RepositoryAnalysis = {
         { type: 'added', module: 'runtime', detail: 'New orchestration layer' },
         { type: 'split', module: 'agent', to: ['planner', 'executor'], detail: 'Agent split into Planner + Executor' },
       ],
+      splits: [{ from: 'agent', fromId: 'src-agent', to: ['planner', 'executor'], toIds: ['src-planner', 'src-executor'], confidence: 0.92 }],
+      changedFiles: ['src/planner/index.ts', 'src/executor/index.ts', 'src/runtime/index.ts'],
     },
     {
       fromSnapshotId: 'snap-d4e5f6a',
@@ -318,4 +379,8 @@ export const demoAnalysis: RepositoryAnalysis = {
     { timestamp: '2024-08-17T16:45:00Z', commit: 'd4e5f6789012345678901234567890abcdef0', shortCommit: 'd4e5f6a', label: '2024.08', snapshotId: 'snap-d4e5f6a', eventIds: ['event-3'] },
     { timestamp: '2025-01-20T11:00:00Z', commit: 'e5f6a7b89012345678901234567890abcdef01', shortCommit: 'e5f6a7b', label: '2025.01', snapshotId: 'snap-e5f6a7b', eventIds: ['event-4'] },
   ],
+  language: 'typescript',
+  layout: {},
 };
+
+export const demoAnalysis: RepositoryAnalysis = hydrateDemo(rawDemo);
