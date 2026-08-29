@@ -10,6 +10,10 @@ import { matchModules, overlapScore } from './module-identity.js';
 
 const SPLIT_CONFIDENCE_MIN = 0.55;
 const MERGE_CONFIDENCE_MIN = 0.55;
+const GENERIC_FILE_NAMES = new Set([
+  'index.ts', 'index.tsx', 'index.js', 'index.jsx', 'index.mts', 'index.cts',
+  'mod.ts', 'mod.js', 'main.ts', 'main.js',
+]);
 
 export class ChangeDetector {
   detectDelta(
@@ -18,7 +22,9 @@ export class ChangeDetector {
     renamedFiles: GitRename[] = [],
     changedFiles: string[] = []
   ): SnapshotDelta {
-    const matches = matchModules(from.modules, to.modules, renamedFiles);
+    const fromContext = { modules: from.modules, dependencies: from.dependencies };
+    const toContext = { modules: to.modules, dependencies: to.dependencies };
+    const matches = matchModules(from.modules, to.modules, renamedFiles, fromContext, toContext);
     const matchedFrom = new Set(matches.map((m) => m.from.id));
     const matchedTo = new Set(matches.map((m) => m.to.id));
 
@@ -71,7 +77,9 @@ export class ChangeDetector {
     const { splits, merges, consumedFrom, consumedTo } = detectSplitsAndMerges(
       unmatchedFrom,
       unmatchedTo,
-      renamedFiles
+      renamedFiles,
+      fromContext,
+      toContext
     );
 
     const added = unmatchedTo.filter((m) => !consumedTo.has(m.id));
@@ -139,7 +147,9 @@ export class ChangeDetector {
 function detectSplitsAndMerges(
   removed: ModuleNode[],
   added: ModuleNode[],
-  renamedFiles: GitRename[]
+  renamedFiles: GitRename[],
+  fromContext: { modules: ModuleNode[]; dependencies: DependencyEdge[] },
+  toContext: { modules: ModuleNode[]; dependencies: DependencyEdge[] }
 ): {
   splits: SnapshotDelta['splits'];
   merges: SnapshotDelta['merges'];
@@ -154,23 +164,34 @@ function detectSplitsAndMerges(
 
   for (const parent of removed) {
     const children = added
-      .map((child) => ({ child, overlap: fileOverlap(parent, child, renameMap) }))
+      .map((child) => ({
+        child,
+        overlap: fileOverlap(parent, child, renameMap, fromContext, toContext),
+        evidence: transferEvidence(parent, child, renameMap),
+      }))
+      .filter((x) => x.evidence.size > 0)
       .filter((x) => x.overlap >= 0.2)
       .sort((a, b) => b.overlap - a.overlap);
 
-    if (children.length >= 2) {
-      const covered = children.reduce((s, c) => s + c.overlap, 0);
-      const confidence = Math.min(0.95, 0.45 + covered / children.length);
+    const distinctChildren = children.filter((candidate) =>
+      [...candidate.evidence].some((item) =>
+        children.filter((other) => other.evidence.has(item)).length === 1
+      )
+    );
+
+    if (distinctChildren.length >= 2) {
+      const covered = distinctChildren.reduce((s, c) => s + c.overlap, 0);
+      const confidence = Math.min(0.95, 0.45 + covered / distinctChildren.length);
       if (confidence >= SPLIT_CONFIDENCE_MIN) {
         splits.push({
           from: parent.name,
           fromId: parent.id,
-          to: children.map((c) => c.child.name),
-          toIds: children.map((c) => c.child.id),
+          to: distinctChildren.map((c) => c.child.name),
+          toIds: distinctChildren.map((c) => c.child.id),
           confidence,
         });
         consumedFrom.add(parent.id);
-        for (const c of children) consumedTo.add(c.child.id);
+        for (const c of distinctChildren) consumedTo.add(c.child.id);
       }
     }
   }
@@ -179,22 +200,36 @@ function detectSplitsAndMerges(
     if (consumedTo.has(child.id)) continue;
     const parents = removed
       .filter((p) => !consumedFrom.has(p.id))
-      .map((parent) => ({ parent, overlap: fileOverlap(parent, child, renameMap) }))
+      .map((parent) => ({
+        parent,
+        overlap: fileOverlap(parent, child, renameMap, fromContext, toContext),
+        evidence: transferEvidence(parent, child, renameMap),
+      }))
+      .filter((x) => x.evidence.size > 0)
       .filter((x) => x.overlap >= 0.2)
       .sort((a, b) => b.overlap - a.overlap);
 
-    if (parents.length >= 2) {
-      const confidence = Math.min(0.95, 0.45 + parents.reduce((s, p) => s + p.overlap, 0) / parents.length);
+    const distinctParents = parents.filter((candidate) =>
+      [...candidate.evidence].some((item) =>
+        parents.filter((other) => other.evidence.has(item)).length === 1
+      )
+    );
+
+    if (distinctParents.length >= 2) {
+      const confidence = Math.min(
+        0.95,
+        0.45 + distinctParents.reduce((s, p) => s + p.overlap, 0) / distinctParents.length
+      );
       if (confidence >= MERGE_CONFIDENCE_MIN) {
         merges.push({
-          from: parents.map((p) => p.parent.name),
-          fromIds: parents.map((p) => p.parent.id),
+          from: distinctParents.map((p) => p.parent.name),
+          fromIds: distinctParents.map((p) => p.parent.id),
           to: child.name,
           toId: child.id,
           confidence,
         });
         consumedTo.add(child.id);
-        for (const p of parents) consumedFrom.add(p.parent.id);
+        for (const p of distinctParents) consumedFrom.add(p.parent.id);
       }
     }
   }
@@ -202,8 +237,34 @@ function detectSplitsAndMerges(
   return { splits, merges, consumedFrom, consumedTo };
 }
 
-function fileOverlap(a: ModuleNode, b: ModuleNode, renameMap: Map<string, string>): number {
-  return overlapScore(a, b, renameMap);
+function fileOverlap(
+  a: ModuleNode,
+  b: ModuleNode,
+  renameMap: Map<string, string>,
+  fromContext: { modules: ModuleNode[]; dependencies: DependencyEdge[] },
+  toContext: { modules: ModuleNode[]; dependencies: DependencyEdge[] }
+): number {
+  return overlapScore(a, b, renameMap, fromContext, toContext);
+}
+
+function transferEvidence(
+  from: ModuleNode,
+  to: ModuleNode,
+  renameMap: Map<string, string>
+): Set<string> {
+  const evidence = new Set<string>();
+  for (const file of from.files) {
+    const destination = renameMap.get(file);
+    if (destination && to.files.includes(destination)) evidence.add(`file:${file}`);
+    const name = file.split('/').pop() ?? file;
+    if (!GENERIC_FILE_NAMES.has(name) && to.files.some((candidate) => candidate.endsWith(`/${name}`))) {
+      evidence.add(`name:${name}`);
+    }
+  }
+  for (const symbol of from.symbols) {
+    if (to.symbols.includes(symbol)) evidence.add(`symbol:${symbol}`);
+  }
+  return evidence;
 }
 
 function detectDependencyChanges(

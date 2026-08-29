@@ -5,7 +5,7 @@ import { ChangeDetector, summarizeDelta } from './change-detector.js';
 import { classifyEventType } from './event-clusterer.js';
 import { detectModulePath, parseSourceFile, resolveSpecifier } from './snapshot-builder.js';
 import { parseTsJs, resolvePathAlias, aliasesFromPaths } from './languages/ts-js.js';
-import { matchModules, pathToModuleId } from './module-identity.js';
+import { matchModules, pathToModuleId, stabilizeSnapshotIdentities } from './module-identity.js';
 import type { Snapshot, ModuleNode } from '@repo-archaeologist/core';
 import type { CommitInfo } from './git/types.js';
 
@@ -200,6 +200,62 @@ describe('change-detector', () => {
     assert.equal(delta.added.length, 1);
     assert.equal(delta.added[0].name, 'agency');
   });
+
+  it('does not infer a split from dependency overlap and repeated generic symbols alone', () => {
+    const detector = new ChangeDetector();
+    const fromAgent = mod('src/agent', ['src/agent/index.ts'], ['run']);
+    const fromRuntime = mod('src/runtime', ['src/runtime/index.ts'], ['Runtime']);
+    const toPlanner = mod('src/planner', ['src/planner/index.ts'], ['run']);
+    const toExecutor = mod('src/executor', ['src/executor/index.ts'], ['run']);
+    const toRuntime = mod('src/runtime', ['src/runtime/index.ts'], ['Runtime']);
+    const from: Snapshot = {
+      id: 's1', commit: 'a', shortCommit: 'a', timestamp: '2024-01-01', message: '', author: '',
+      modules: [fromAgent, fromRuntime],
+      dependencies: [{ from: fromAgent.id, to: fromRuntime.id, weight: 1 }],
+      totalFiles: 2, totalLines: 80, reconstructedFrom: 'git+typescript-ast', fingerprint: 't',
+    };
+    const to: Snapshot = {
+      id: 's2', commit: 'b', shortCommit: 'b', timestamp: '2024-06-01', message: '', author: '',
+      modules: [toPlanner, toExecutor, toRuntime],
+      dependencies: [
+        { from: toPlanner.id, to: toRuntime.id, weight: 1 },
+        { from: toExecutor.id, to: toRuntime.id, weight: 1 },
+      ],
+      totalFiles: 3, totalLines: 120, reconstructedFrom: 'git+typescript-ast', fingerprint: 't',
+    };
+
+    const delta = detector.detectDelta(from, to);
+    assert.equal(delta.splits.length, 0);
+    assert.equal(delta.removed.some((module) => module.path === 'src/agent'), true);
+  });
+
+  it('does not infer a merge from dependency overlap and repeated generic symbols alone', () => {
+    const detector = new ChangeDetector();
+    const fromPlanner = mod('src/planner', ['src/planner/index.ts'], ['run']);
+    const fromExecutor = mod('src/executor', ['src/executor/index.ts'], ['run']);
+    const fromRuntime = mod('src/runtime', ['src/runtime/index.ts'], ['Runtime']);
+    const toAgent = mod('src/agent', ['src/agent/index.ts'], ['run']);
+    const toRuntime = mod('src/runtime', ['src/runtime/index.ts'], ['Runtime']);
+    const from: Snapshot = {
+      id: 's1', commit: 'a', shortCommit: 'a', timestamp: '2024-01-01', message: '', author: '',
+      modules: [fromPlanner, fromExecutor, fromRuntime],
+      dependencies: [
+        { from: fromPlanner.id, to: fromRuntime.id, weight: 1 },
+        { from: fromExecutor.id, to: fromRuntime.id, weight: 1 },
+      ],
+      totalFiles: 3, totalLines: 120, reconstructedFrom: 'git+typescript-ast', fingerprint: 't',
+    };
+    const to: Snapshot = {
+      id: 's2', commit: 'b', shortCommit: 'b', timestamp: '2024-06-01', message: '', author: '',
+      modules: [toAgent, toRuntime],
+      dependencies: [{ from: toAgent.id, to: toRuntime.id, weight: 1 }],
+      totalFiles: 2, totalLines: 80, reconstructedFrom: 'git+typescript-ast', fingerprint: 't',
+    };
+
+    const delta = detector.detectDelta(from, to);
+    assert.equal(delta.merges.length, 0);
+    assert.equal(delta.added.some((module) => module.path === 'src/agent'), true);
+  });
 });
 
 describe('module identity', () => {
@@ -209,6 +265,96 @@ describe('module identity', () => {
     const matches = matchModules(from, to, [{ from: 'src/core/llm.ts', to: 'src/runtime/llm.ts' }]);
     assert.equal(matches.length, 1);
     assert.equal(matches[0].reason, 'rename');
+  });
+
+  it('uses dependency neighborhoods to disambiguate a structural move', () => {
+    const before = mod('src/api', ['src/api/index.ts'], ['handle', 'validate']);
+    const databaseBefore = mod('src/database', ['src/database/index.ts'], ['query']);
+    const loggerBefore = mod('src/logger', ['src/logger/index.ts'], ['log']);
+    const after = mod('src/service', ['src/service/main.ts'], ['handle', 'validate']);
+    const decoy = mod('src/worker', ['src/worker/main.ts'], ['handle', 'validate']);
+    const databaseAfter = mod('src/database', ['src/database/index.ts'], ['query']);
+    const loggerAfter = mod('src/logger', ['src/logger/index.ts'], ['log']);
+    const beforeModules = [before, databaseBefore, loggerBefore];
+    const afterModules = [after, decoy, databaseAfter, loggerAfter];
+    const matches = matchModules(
+      beforeModules,
+      afterModules,
+      [],
+      {
+        modules: beforeModules,
+        dependencies: [
+          { from: before.id, to: databaseBefore.id, weight: 1 },
+          { from: loggerBefore.id, to: before.id, weight: 1 },
+        ],
+      },
+      {
+        modules: afterModules,
+        dependencies: [
+          { from: after.id, to: databaseAfter.id, weight: 1 },
+          { from: loggerAfter.id, to: after.id, weight: 1 },
+        ],
+      }
+    );
+
+    const moved = matches.find((match) => match.from.path === 'src/api');
+    assert.equal(moved?.to.path, 'src/service');
+    assert.equal(moved?.reason, 'structure');
+  });
+
+  it('leaves equally plausible structural matches unresolved', () => {
+    const before = mod('src/api', ['src/api/index.ts'], ['handle', 'validate']);
+    const databaseBefore = mod('src/database', ['src/database/index.ts'], ['query']);
+    const first = mod('src/service-a', ['src/service-a/main.ts'], ['handle', 'validate']);
+    const second = mod('src/service-b', ['src/service-b/main.ts'], ['handle', 'validate']);
+    const databaseAfter = mod('src/database', ['src/database/index.ts'], ['query']);
+    const beforeModules = [before, databaseBefore];
+    const afterModules = [first, second, databaseAfter];
+    const matches = matchModules(
+      beforeModules,
+      afterModules,
+      [],
+      {
+        modules: beforeModules,
+        dependencies: [{ from: before.id, to: databaseBefore.id, weight: 1 }],
+      },
+      {
+        modules: afterModules,
+        dependencies: [
+          { from: first.id, to: databaseAfter.id, weight: 1 },
+          { from: second.id, to: databaseAfter.id, weight: 1 },
+        ],
+      }
+    );
+
+    assert.equal(matches.some((match) => match.from.path === 'src/api'), false);
+  });
+
+  it('rewrites dependency endpoints when stabilizing a moved module identity', () => {
+    const before = mod('src/api', ['src/api/index.ts'], ['handle']);
+    const databaseBefore = mod('src/database', ['src/database/index.ts'], ['query']);
+    const after = mod('src/service', ['src/service/main.ts'], ['handle']);
+    const databaseAfter = mod('src/database', ['src/database/index.ts'], ['query']);
+    const snapshots: Snapshot[] = [
+      {
+        id: 's1', commit: 'a', shortCommit: 'a', timestamp: '2024-01-01', message: '', author: '',
+        modules: [before, databaseBefore],
+        dependencies: [{ from: before.id, to: databaseBefore.id, weight: 1 }],
+        totalFiles: 2, totalLines: 80, reconstructedFrom: 'git+typescript-ast', fingerprint: 'before',
+      },
+      {
+        id: 's2', commit: 'b', shortCommit: 'b', timestamp: '2024-06-01', message: '', author: '',
+        modules: [after, databaseAfter],
+        dependencies: [{ from: after.id, to: databaseAfter.id, weight: 1 }],
+        totalFiles: 2, totalLines: 80, reconstructedFrom: 'git+typescript-ast', fingerprint: 'after',
+      },
+    ];
+
+    stabilizeSnapshotIdentities(snapshots);
+
+    assert.equal(after.id, before.id);
+    assert.equal(snapshots[1].dependencies[0].from, before.id);
+    assert.notEqual(snapshots[1].fingerprint, 'after');
   });
 });
 

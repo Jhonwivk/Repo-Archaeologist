@@ -13,7 +13,7 @@ import { selectImportantCommits } from './commit-selector.js';
 import { SnapshotBuilder } from './snapshot-builder.js';
 import { ChangeDetector } from './change-detector.js';
 import { EventClusterer, buildModuleEvolutions, buildTimeline } from './event-clusterer.js';
-import { stabilizeIdentities } from './module-identity.js';
+import { stabilizeSnapshotIdentities } from './module-identity.js';
 import { computeStableLayout } from './layout.js';
 import { DEFAULT_ANALYZE_OPTIONS } from './git/types.js';
 
@@ -99,7 +99,7 @@ export class RepositoryAnalyzer {
       snapshots.push(await snapshotBuilder.buildSnapshot(commit));
     }
 
-    stabilizeIdentities(snapshots.map((s) => s.modules));
+    stabilizeSnapshotIdentities(snapshots);
 
     onProgress?.({ stage: 'detecting_changes', progress: 75, message: 'Detecting architecture changes...' });
 
