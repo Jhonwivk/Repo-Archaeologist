@@ -124,8 +124,22 @@ export function EventDetail({ event, onClose }: EventDetailProps) {
         </Section>
       )}
 
+      {(event.symbols?.length > 0 || event.evidence.some((e) => e.kind === 'symbol')) && (
+        <Section title="Symbols">
+          {(event.evidence.filter((e) => e.kind === 'symbol').length
+            ? event.evidence.filter((e) => e.kind === 'symbol')
+            : (event.symbols ?? []).map((symbol) => ({ kind: 'symbol' as const, description: symbol, symbol }))
+          ).map((ev, i) => (
+            <div key={`${ev.symbol}-${i}`} className="text-xs font-mono text-amber-300">
+              {ev.description}
+              {'file' in ev && ev.file && <span className="ml-2 text-gray-500">{ev.file}</span>}
+            </div>
+          ))}
+        </Section>
+      )}
+
       <Section title="Evidence">
-        {event.evidence.filter((e) => e.kind !== 'commit_message').map((ev, i) => (
+        {event.evidence.filter((e) => e.kind !== 'commit_message' && e.kind !== 'file_change' && e.kind !== 'symbol').map((ev, i) => (
           <EvidenceLine key={i} ev={ev} />
         ))}
       </Section>

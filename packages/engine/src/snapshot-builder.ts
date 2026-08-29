@@ -1,5 +1,6 @@
 import { posix as path } from 'node:path';
 import type { ModuleNode, DependencyEdge, Snapshot } from '@repo-archaeologist/core';
+import { snapshotFingerprint } from '@repo-archaeologist/core';
 import type { GitAnalyzer, CommitInfo } from './git/types.js';
 import {
   parseSource,
@@ -83,8 +84,7 @@ export class SnapshotBuilder {
     const dependencies = this.buildDependencyGraph(parsedFiles, modules, fileToModule, aliases, workspaces);
 
     const totalLines = modules.reduce((sum, m) => sum + m.linesOfCode, 0);
-
-    return {
+    const snapshot: Snapshot = {
       id: `snap-${commit.shortHash}`,
       commit: commit.hash,
       shortCommit: commit.shortHash,
@@ -95,7 +95,11 @@ export class SnapshotBuilder {
       dependencies,
       totalFiles: sourceFiles.length,
       totalLines,
+      reconstructedFrom: 'git+typescript-ast',
+      fingerprint: '',
     };
+    snapshot.fingerprint = snapshotFingerprint(snapshot);
+    return snapshot;
   }
 
   private async loadWorkspaces(commit: string, allFiles: string[]): Promise<WorkspacePackage[]> {
@@ -178,6 +182,7 @@ export class SnapshotBuilder {
       modules.filter((m) => m.packageName).map((m) => [m.packageName as string, m.path])
     );
     const weights = new Map<string, number>();
+    const vias = new Map<string, string[]>();
 
     for (const file of files) {
       const fromPath = file.modulePath;
@@ -191,12 +196,15 @@ export class SnapshotBuilder {
         if (!toId || toId === fromId) continue;
         const key = `${fromId}->${toId}`;
         weights.set(key, (weights.get(key) ?? 0) + 1);
+        const listed = vias.get(key) ?? [];
+        if (!listed.includes(spec)) listed.push(spec);
+        vias.set(key, listed.slice(0, 4));
       }
     }
 
     return [...weights.entries()].map(([key, weight]) => {
       const [from, to] = key.split('->');
-      return { from, to, weight };
+      return { from, to, weight, via: vias.get(key) };
     });
   }
 }

@@ -78,22 +78,38 @@ export class EventClusterer {
       clusters.push(current);
     }
 
-    return clusters.map((cluster, idx) => this.clusterToEvent(cluster, idx));
+    return clusters.map((cluster, idx) => this.clusterToEvent(cluster, idx, snapshots));
   }
 
-  private clusterToEvent(cluster: CommitCluster, index: number): EvolutionEvent {
+  private clusterToEvent(cluster: CommitCluster, index: number, allSnapshots: Snapshot[]): EvolutionEvent {
     const allChanges = cluster.deltas.flatMap((d) => d.changes);
     const affectedModules = [...new Set(allChanges.map((c) => c.module))];
     const eventType = classifyEventType(allChanges, cluster.commits);
     const title = generateEventTitle(eventType, allChanges);
     const summary = generateEventSummary(eventType, allChanges, cluster.commits);
     const changedFiles = [...new Set(cluster.deltas.flatMap((d) => d.changedFiles))];
-    const evidence = this.buildEvidence(allChanges, cluster.commits, cluster.deltas, changedFiles);
+    const fromSnap = cluster.deltas[0]
+      ? allSnapshots.find((s) => s.id === cluster.deltas[0].fromSnapshotId)
+      : undefined;
+    const toSnap = cluster.deltas.length
+      ? allSnapshots.find((s) => s.id === cluster.deltas[cluster.deltas.length - 1].toSnapshotId)
+        ?? cluster.snapshots[cluster.snapshots.length - 1]
+      : cluster.snapshots[cluster.snapshots.length - 1];
+    const symbolChanges = diffSymbols(fromSnap, toSnap, allChanges);
+    const evidence = this.buildEvidence(
+      allChanges,
+      cluster.commits,
+      cluster.deltas,
+      changedFiles,
+      symbolChanges,
+      fromSnap,
+      toSnap
+    );
     const blastRadius = computeBlastRadius(cluster.deltas, cluster.commits);
     const confidence = averageConfidence(allChanges);
 
-    const fromSnap = cluster.deltas[0]?.fromSnapshotId ?? cluster.snapshots[0]?.id ?? '';
-    const toSnap = cluster.deltas[cluster.deltas.length - 1]?.toSnapshotId
+    const fromSnapshotId = cluster.deltas[0]?.fromSnapshotId ?? cluster.snapshots[0]?.id ?? '';
+    const toSnapshotId = cluster.deltas[cluster.deltas.length - 1]?.toSnapshotId
       ?? cluster.snapshots[cluster.snapshots.length - 1]?.id
       ?? '';
 
@@ -113,10 +129,11 @@ export class EventClusterer {
       changes: dedupeChanges(allChanges),
       evidence,
       blastRadius,
-      fromSnapshotId: fromSnap,
-      toSnapshotId: toSnap,
-      changedFiles: changedFiles.slice(0, 40),
+      fromSnapshotId,
+      toSnapshotId,
+      changedFiles: (changedFiles.length ? changedFiles : filesFromSnapshots(fromSnap, toSnap)).slice(0, 40),
       confidence,
+      symbols: symbolChanges.map((s) => s.symbol).filter((s): s is string => Boolean(s)),
     };
   }
 
@@ -124,7 +141,10 @@ export class EventClusterer {
     changes: ArchitectureChange[],
     commits: CommitInfo[],
     deltas: SnapshotDelta[],
-    changedFiles: string[]
+    changedFiles: string[],
+    symbolChanges: Evidence[],
+    fromSnap: Snapshot | undefined,
+    toSnap: Snapshot | undefined
   ): Evidence[] {
     const evidence: Evidence[] = [];
 
@@ -146,7 +166,8 @@ export class EventClusterer {
     }
 
     const endCommit = commits[commits.length - 1];
-    for (const file of changedFiles.slice(0, 12)) {
+    const files = changedFiles.length ? changedFiles : filesFromSnapshots(fromSnap, toSnap);
+    for (const file of files.slice(0, 12)) {
       evidence.push({
         kind: 'file_change',
         description: file,
@@ -155,6 +176,8 @@ export class EventClusterer {
         url: endCommit ? githubFileUrl(this.repoUrl, endCommit.hash, file) : undefined,
       });
     }
+
+    evidence.push(...symbolChanges.slice(0, 12));
 
     const depChanges = deltas.reduce(
       (sum, d) => sum + d.dependencyChanges.added.length + d.dependencyChanges.removed.length,
@@ -282,6 +305,74 @@ function dedupeChanges(changes: ArchitectureChange[]): ArchitectureChange[] {
     seen.add(key);
     return true;
   });
+}
+
+function filesFromSnapshots(fromSnap: Snapshot | undefined, toSnap: Snapshot | undefined): string[] {
+  const files = new Set<string>();
+  for (const mod of [...(fromSnap?.modules ?? []), ...(toSnap?.modules ?? [])]) {
+    for (const file of mod.files) files.add(file);
+  }
+  return [...files];
+}
+
+function diffSymbols(fromSnap: Snapshot | undefined, toSnap: Snapshot | undefined, changes: ArchitectureChange[] = []): Evidence[] {
+  if (!toSnap) return [];
+  const evidence: Evidence[] = [];
+  const fromById = new Map((fromSnap?.modules ?? []).map((m) => [m.id, m]));
+  const fromByPath = new Map((fromSnap?.modules ?? []).map((m) => [m.path, m]));
+  const toIds = new Set(toSnap.modules.map((m) => m.id));
+
+  for (const mod of toSnap.modules) {
+    const prev = fromById.get(mod.id) ?? fromByPath.get(mod.path);
+    const prevSymbols = new Set(prev?.symbols ?? []);
+    for (const symbol of mod.symbols) {
+      if (!prevSymbols.has(symbol)) {
+        evidence.push({
+          kind: 'symbol',
+          description: `+ ${mod.name}.${symbol}`,
+          symbol: `${mod.name}.${symbol}`,
+          module: mod.name,
+          file: mod.files[0],
+          commit: toSnap.commit,
+        });
+      }
+    }
+  }
+
+  for (const mod of fromSnap?.modules ?? []) {
+    if (toIds.has(mod.id)) continue;
+    const stillThere = toSnap.modules.some((m) => m.path === mod.path);
+    if (stillThere) continue;
+    for (const symbol of mod.symbols.slice(0, 4)) {
+      evidence.push({
+        kind: 'symbol',
+        description: `− ${mod.name}.${symbol}`,
+        symbol: `${mod.name}.${symbol}`,
+        module: mod.name,
+        file: mod.files[0],
+        commit: fromSnap?.commit,
+      });
+    }
+  }
+
+  if (evidence.length === 0) {
+    const affected = new Set(changes.map((c) => c.module.toLowerCase()));
+    for (const mod of [...(fromSnap?.modules ?? []), ...(toSnap?.modules ?? [])]) {
+      if (!affected.has(mod.name.toLowerCase()) && !changes.some((c) => c.moduleId === mod.id)) continue;
+      for (const symbol of mod.symbols.slice(0, 3)) {
+        evidence.push({
+          kind: 'symbol',
+          description: `${mod.name}.${symbol}`,
+          symbol: `${mod.name}.${symbol}`,
+          module: mod.name,
+          file: mod.files[0],
+          commit: toSnap?.commit,
+        });
+      }
+    }
+  }
+
+  return evidence;
 }
 
 function averageConfidence(changes: ArchitectureChange[]): number {

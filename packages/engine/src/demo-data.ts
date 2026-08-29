@@ -10,10 +10,16 @@ function fillModule(m: any): ModuleNode {
 }
 
 function hydrateDemo(raw: any): RepositoryAnalysis {
-  const snapshots = raw.snapshots.map((s: any) => ({
-    ...s,
-    modules: s.modules.map(fillModule),
-  }));
+  const snapshots = raw.snapshots.map((s: any) => {
+    const snap = {
+      ...s,
+      modules: s.modules.map(fillModule),
+      reconstructedFrom: 'git+typescript-ast' as const,
+      fingerprint: '',
+    };
+    snap.fingerprint = `${snap.modules.map((m: ModuleNode) => m.path).sort().join(',')}::${snap.dependencies.map((e: { from: string; to: string }) => `${e.from}->${e.to}`).sort().join(',')}`;
+    return snap;
+  });
   const deltas: SnapshotDelta[] = raw.deltas.map((d: any) => ({
     ...d,
     added: d.added.map(fillModule),
@@ -30,18 +36,23 @@ function hydrateDemo(raw: any): RepositoryAnalysis {
     merges: d.merges ?? [],
     changedFiles: d.changedFiles ?? [],
   }));
-  const evolutionEvents: EvolutionEvent[] = raw.evolutionEvents.map((e: any, i: number) => ({
-    ...e,
-    fromSnapshotId: e.fromSnapshotId || deltas[i]?.fromSnapshotId || snapshots[0]?.id || '',
-    toSnapshotId: e.toSnapshotId || deltas[i]?.toSnapshotId || snapshots[snapshots.length - 1]?.id || '',
-    changedFiles: e.changedFiles?.length ? e.changedFiles : (deltas[i]?.changedFiles ?? []),
-    confidence: e.confidence ?? 0.9,
-    evidence: e.evidence.map((ev: any) => ({
-      ...ev,
-      commit: ev.commit ?? e.endCommit,
-      url: ev.url ?? `https://github.com/example/agent-runtime/commit/${e.endCommit}`,
-    })),
-  }));
+  const evolutionEvents: EvolutionEvent[] = raw.evolutionEvents.map((e: any, i: number) => {
+    const fromSnapshotId = e.fromSnapshotId || deltas[i]?.fromSnapshotId || snapshots[0]?.id || '';
+    const toSnapshotId = e.toSnapshotId || deltas[i]?.toSnapshotId || snapshots[snapshots.length - 1]?.id || '';
+    const changedFiles = e.changedFiles?.length ? e.changedFiles : (deltas[i]?.changedFiles ?? []);
+    const hydrated = {
+      ...e,
+      fromSnapshotId,
+      toSnapshotId,
+      changedFiles,
+      confidence: e.confidence ?? 0.9,
+    };
+    return {
+      ...hydrated,
+      evidence: enrichDemoEvidence(hydrated, snapshots, deltas[i]),
+      symbols: e.symbols ?? symbolNamesFromSnapshots(snapshots, hydrated),
+    };
+  });
   const moduleEvolutions: ModuleEvolution[] = raw.moduleEvolutions.map((m: any) => ({
     ...m,
     moduleId: m.moduleId ?? `src-${m.module}`,
@@ -57,6 +68,61 @@ function hydrateDemo(raw: any): RepositoryAnalysis {
     moduleEvolutions,
     layout: Object.keys(raw.layout ?? {}).length ? raw.layout : computeStableLayout(snapshots),
   };
+}
+
+function enrichDemoEvidence(event: any, snapshots: any[], delta?: SnapshotDelta): EvolutionEvent['evidence'] {
+  const end = event.endCommit;
+  const base = (event.evidence ?? []).map((ev: any) => ({
+    ...ev,
+    commit: ev.commit ?? end,
+    url: ev.url ?? `https://github.com/example/agent-runtime/commit/${end}`,
+  }));
+  const from = snapshots.find((s) => s.id === (event.fromSnapshotId || delta?.fromSnapshotId));
+  const to = snapshots.find((s) => s.id === (event.toSnapshotId || delta?.toSnapshotId));
+  const files = event.changedFiles?.length ? event.changedFiles : (delta?.changedFiles ?? []);
+  for (const file of files.slice(0, 8)) {
+    if (!base.some((ev: any) => ev.file === file)) {
+      base.push({
+        kind: 'file_change',
+        description: file,
+        file,
+        commit: end,
+        url: `https://github.com/example/agent-runtime/blob/${end}/${file}`,
+      });
+    }
+  }
+  for (const ev of symbolEvidenceFromPair(from, to)) {
+    if (!base.some((item: any) => item.symbol === ev.symbol)) base.push(ev);
+  }
+  return base;
+}
+
+function symbolEvidenceFromPair(from: any, to: any): EvolutionEvent['evidence'] {
+  if (!to) return [];
+  const prev = new Map<string, Set<string>>((from?.modules ?? []).map((m: ModuleNode) => [m.id, new Set(m.symbols)]));
+  const out: EvolutionEvent['evidence'] = [];
+  for (const mod of to.modules as ModuleNode[]) {
+    const before = prev.get(mod.id) ?? new Set<string>();
+    for (const symbol of mod.symbols) {
+      if (!before.has(symbol)) {
+        out.push({
+          kind: 'symbol',
+          description: `+ ${mod.name}.${symbol}`,
+          symbol: `${mod.name}.${symbol}`,
+          module: mod.name,
+          file: mod.files[0],
+          commit: to.commit,
+        });
+      }
+    }
+  }
+  return out.slice(0, 8);
+}
+
+function symbolNamesFromSnapshots(snapshots: any[], event: any): string[] {
+  const from = snapshots.find((s) => s.id === event.fromSnapshotId);
+  const to = snapshots.find((s) => s.id === event.toSnapshotId);
+  return symbolEvidenceFromPair(from, to).map((e) => e.symbol!).filter(Boolean);
 }
 
 /** Pre-built demo analysis showcasing Repo Archaeologist capabilities */

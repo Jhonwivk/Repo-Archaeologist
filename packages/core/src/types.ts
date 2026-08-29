@@ -17,6 +17,8 @@ export interface DependencyEdge {
   from: string;
   to: string;
   weight: number;
+  /** Import specifiers that produced this edge, taken from the commit's source. */
+  via?: string[];
 }
 
 export interface GraphPosition {
@@ -49,6 +51,10 @@ export interface Snapshot {
   dependencies: DependencyEdge[];
   totalFiles: number;
   totalLines: number;
+  /** Always git tree + TS/JS AST. Never LLM. */
+  reconstructedFrom: 'git+typescript-ast';
+  /** Canonical module-path + edge signature at this commit. */
+  fingerprint: string;
 }
 
 export interface ArchitectureChange {
@@ -67,7 +73,8 @@ export type EvidenceKind =
   | 'readme'
   | 'module_delta'
   | 'dependency_change'
-  | 'git_rename';
+  | 'git_rename'
+  | 'symbol';
 
 export interface Evidence {
   kind: EvidenceKind;
@@ -76,6 +83,8 @@ export interface Evidence {
   commit?: string;
   file?: string;
   url?: string;
+  symbol?: string;
+  module?: string;
 }
 
 export interface EvolutionEvent {
@@ -95,6 +104,8 @@ export interface EvolutionEvent {
   toSnapshotId: string;
   changedFiles: string[];
   confidence: number;
+  /** Exported symbols that appeared or disappeared across this event. */
+  symbols: string[];
 }
 
 export interface BlastRadius {

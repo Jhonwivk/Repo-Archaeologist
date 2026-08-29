@@ -7,7 +7,13 @@ Reconstruct the architectural evolution of a GitHub repository. Convert thousand
 
 **Demo path:** paste a repo → pick a major evolution event → inspect how the system changed, which modules split or moved, and which real commits/files support that conclusion.
 
-## V1.1 scope
+## Three invariants
+
+1. **Snapshots are reconstructed, not guessed.** A snapshot at commit `H` is built from `git ls-tree` + TypeScript Compiler API. Rebuilding it twice yields the same `fingerprint`.
+2. **Every structural Evolution Event has evidence.** Architecture migration / split / merge / move must cite commits, files, and exported symbols. The UI links them.
+3. **The timeline replays architecture.** Dragging the range control changes the live graph’s nodes and edges (the structure signature under the title updates). It does not only swap a text summary.
+
+
 
 V1.1 is optimized for **TypeScript/JavaScript repositories and monorepos**.
 

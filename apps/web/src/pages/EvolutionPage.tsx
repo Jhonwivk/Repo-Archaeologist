@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import type { RepositoryAnalysis } from '@repo-archaeologist/core';
+import { graphStructure } from '@repo-archaeologist/core';
 import { fetchDemo, fetchAnalysis, fetchProgress, getSnapshotAtIndex, formatDate } from '../lib/api';
 import Timeline from '../components/Timeline';
 import ArchitectureGraph from '../components/ArchitectureGraph';
 import EventPanel, { EventDetail } from '../components/EventPanel';
-import BeforeAfter, { GenealogyPanel } from '../components/BeforeAfter';
+import { GenealogyPanel } from '../components/BeforeAfter';
 
 export default function EvolutionPage() {
   const { id } = useParams<{ id: string }>();
@@ -90,6 +91,24 @@ export default function EvolutionPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!analysis) return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setSelectedEventId(undefined);
+        setCurrentIndex((i) => Math.max(0, i - 1));
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setSelectedEventId(undefined);
+        setCurrentIndex((i) => Math.min(analysis.snapshots.length - 1, i + 1));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [analysis]);
+
   if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4">
@@ -123,6 +142,7 @@ export default function EvolutionPage() {
     : undefined;
 
   const highlightModules = selectedEvent?.affectedModules ?? [];
+  const structure = graphStructure(snapshot);
 
   const selectEvent = (eventId: string) => {
     setSelectedEventId(eventId);
@@ -158,33 +178,23 @@ export default function EvolutionPage() {
       <div className="flex-1 flex flex-col lg:flex-row">
         <div className="flex-1 flex flex-col min-w-0">
           <div className="px-6 pt-4 pb-2">
-            <h2 className="text-xs font-medium text-gray-500 uppercase tracking-wider">
-              {selectedEvent ? 'Before / After' : 'Architecture Snapshot'}
-            </h2>
-            <p className="text-sm text-gray-400 mt-0.5">
-              {selectedEvent ? selectedEvent.title : snapshot.message}
+            <h2 className="text-xs font-medium text-gray-500 uppercase tracking-wider">Architecture at this commit</h2>
+            <p className="text-sm text-gray-400 mt-0.5">{snapshot.message}</p>
+            <p className="text-xs font-mono text-gray-500 mt-1" data-testid="architecture-structure">
+              {structure.nodes.length} modules · {structure.edges.length} edges · {structure.nodes.join(' · ') || 'empty'}
             </p>
           </div>
 
-          <div className="flex-1 mx-4 mb-4 min-h-[360px]">
-            {selectedEvent ? (
-              <BeforeAfter
-                analysis={analysis}
-                event={selectedEvent}
-                onModuleClick={(id) => setSelectedModuleId(id)}
-              />
-            ) : (
-              <div className="card h-full">
-                <ArchitectureGraph
-                  modules={snapshot.modules}
-                  dependencies={snapshot.dependencies}
-                  layout={analysis.layout}
-                  highlightModules={highlightModules}
-                  previousModules={prevSnapshot?.modules}
-                  onModuleClick={(m) => setSelectedModuleId(m.id)}
-                />
-              </div>
-            )}
+          <div className="flex-1 card mx-4 mb-4 min-h-[360px]" data-snapshot={snapshot.id} data-fingerprint={snapshot.fingerprint}>
+            <ArchitectureGraph
+              key={snapshot.fingerprint || snapshot.id}
+              modules={snapshot.modules}
+              dependencies={snapshot.dependencies}
+              layout={analysis.layout}
+              highlightModules={highlightModules}
+              previousModules={prevSnapshot?.modules}
+              onModuleClick={(m) => setSelectedModuleId(m.id)}
+            />
           </div>
 
           <div className="border-t border-surface-border bg-surface-raised">
@@ -215,7 +225,7 @@ export default function EvolutionPage() {
               {currentIndex > 0 && analysis.deltas[currentIndex - 1]?.changes.length > 0 && (
                 <div className="p-4 border-t border-surface-border">
                   <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
-                    Changes since {formatDate(analysis.snapshots[currentIndex - 1].timestamp)}
+                    Graph delta since {formatDate(analysis.snapshots[currentIndex - 1].timestamp)}
                   </h3>
                   <div className="space-y-1">
                     {analysis.deltas[currentIndex - 1].changes.map((change, i) => (
