@@ -1,12 +1,47 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchDemo, startAnalysis } from '../lib/api';
+import { fetchCases, startAnalysis } from '../lib/api';
+
+interface FeaturedCase {
+  id: string;
+  title: string;
+  description: string;
+  owner: string;
+  name: string;
+}
+
+const FALLBACK_CASES: FeaturedCase[] = [
+  {
+    id: 'demo',
+    title: 'Agent Runtime (narrative demo)',
+    description: 'CLI → Agent → Planner/Executor → MCP. Best path for a README recording.',
+    owner: 'example',
+    name: 'agent-runtime',
+  },
+  {
+    id: 'evolution-lab',
+    title: 'Evolution Lab (ground-truth fixture)',
+    description: 'Synthetic TypeScript repo with labeled add, move, split, and merge events.',
+    owner: 'repo-archaeologist',
+    name: 'evolution-lab',
+  },
+];
 
 export default function HomePage() {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [cases, setCases] = useState<FeaturedCase[]>([]);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    fetchCases()
+      .then((list) => {
+        if (list.length) setCases(list);
+        else setCases(FALLBACK_CASES);
+      })
+      .catch(() => setCases(FALLBACK_CASES));
+  }, []);
 
   const handleAnalyze = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,23 +59,10 @@ export default function HomePage() {
     }
   };
 
-  const handleDemo = async () => {
-    setLoading(true);
-    try {
-      await fetchDemo();
-      navigate('/evolution/demo');
-    } catch {
-      setError('Failed to load demo');
-      setLoading(false);
-    }
-  };
-
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Hero */}
-      <header className="flex-1 flex flex-col items-center justify-center px-6 py-20">
+      <header className="flex-1 flex flex-col items-center justify-center px-6 py-16">
         <div className="max-w-3xl w-full text-center animate-fade-in">
-          {/* Logo */}
           <div className="flex items-center justify-center gap-3 mb-8">
             <div className="w-10 h-10 rounded-xl bg-archaeologist-600 flex items-center justify-center">
               <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -55,13 +77,14 @@ export default function HomePage() {
             Understand how software<br />became what it is.
           </p>
 
-          <p className="text-lg text-gray-400 mb-12 max-w-xl mx-auto">
-            Reconstruct the architectural evolution of any GitHub repository.
-            Drag through time and watch modules emerge, split, and migrate.
+          <p className="text-lg text-gray-400 mb-3 max-w-xl mx-auto">
+            Reconstruct architectural evolution from Git history. Open an event to see Before / After, then inspect the commits that prove it.
+          </p>
+          <p className="text-sm text-gray-500 mb-10">
+            V1.1 is optimized for TypeScript/JavaScript repositories and monorepos.
           </p>
 
-          {/* Input */}
-          <form onSubmit={handleAnalyze} className="max-w-lg mx-auto mb-6">
+          <form onSubmit={handleAnalyze} className="max-w-lg mx-auto mb-10">
             <div className="flex gap-2">
               <input
                 type="text"
@@ -78,22 +101,28 @@ export default function HomePage() {
             {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
           </form>
 
-          <button onClick={handleDemo} className="text-archaeologist-400 hover:text-archaeologist-300 text-sm transition-colors">
-            or try the interactive demo →
-          </button>
+          <div className="grid sm:grid-cols-2 gap-3 max-w-2xl mx-auto text-left">
+            {cases.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => navigate(`/evolution/${c.id}`)}
+                className="card p-4 hover:border-archaeologist-500 transition-colors text-left"
+              >
+                <p className="text-sm font-medium text-gray-200">{c.title}</p>
+                <p className="text-xs text-gray-500 mt-1">{c.description}</p>
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
-      {/* Tagline */}
       <footer className="border-t border-surface-border py-8 px-6">
         <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-gray-500">
           <p>
-            <span className="text-gray-400">Archify</span> tells you what the system is.<br className="sm:hidden" />
-            {' '}<span className="text-gray-300">Repo Archaeologist</span> tells you how it became that way.
+            <span className="text-gray-400">Archify</span> tells you what the system is.{' '}
+            <span className="text-gray-300">Repo Archaeologist</span> tells you how it became that way.
           </p>
-          <div className="flex gap-6 text-xs">
-            <span>Git → Snapshots → Events → Timeline</span>
-          </div>
+          <span className="text-xs">Git → Snapshots → Events → Timeline</span>
         </div>
       </footer>
     </div>

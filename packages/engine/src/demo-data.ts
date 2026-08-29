@@ -1,7 +1,132 @@
-import type { RepositoryAnalysis } from '@repo-archaeologist/core';
+import type { ModuleNode, RepositoryAnalysis, SnapshotDelta, EvolutionEvent, ModuleEvolution } from '@repo-archaeologist/core';
+import { computeStableLayout } from './layout.js';
+
+function fillModule(m: any): ModuleNode {
+  return {
+    ...m,
+    pathId: m.pathId ?? m.path,
+    files: m.files?.length ? m.files : [`${m.path}/index.ts`],
+  };
+}
+
+function hydrateDemo(raw: any): RepositoryAnalysis {
+  const snapshots = raw.snapshots.map((s: any) => {
+    const snap = {
+      ...s,
+      modules: s.modules.map(fillModule),
+      reconstructedFrom: 'git+typescript-ast' as const,
+      fingerprint: '',
+    };
+    snap.fingerprint = `${snap.modules.map((m: ModuleNode) => m.path).sort().join(',')}::${snap.dependencies.map((e: { from: string; to: string }) => `${e.from}->${e.to}`).sort().join(',')}`;
+    return snap;
+  });
+  const deltas: SnapshotDelta[] = raw.deltas.map((d: any) => ({
+    ...d,
+    added: d.added.map(fillModule),
+    removed: d.removed.map(fillModule),
+    moved: d.moved.map((mv: any) => ({
+      module: mv.module,
+      moduleId: mv.moduleId ?? mv.module,
+      from: mv.from,
+      to: mv.to,
+      confidence: mv.confidence ?? 0.9,
+    })),
+    renamed: d.renamed ?? [],
+    splits: d.splits ?? [],
+    merges: d.merges ?? [],
+    changedFiles: d.changedFiles ?? [],
+  }));
+  const evolutionEvents: EvolutionEvent[] = raw.evolutionEvents.map((e: any, i: number) => {
+    const fromSnapshotId = e.fromSnapshotId || deltas[i]?.fromSnapshotId || snapshots[0]?.id || '';
+    const toSnapshotId = e.toSnapshotId || deltas[i]?.toSnapshotId || snapshots[snapshots.length - 1]?.id || '';
+    const changedFiles = e.changedFiles?.length ? e.changedFiles : (deltas[i]?.changedFiles ?? []);
+    const hydrated = {
+      ...e,
+      fromSnapshotId,
+      toSnapshotId,
+      changedFiles,
+      confidence: e.confidence ?? 0.9,
+    };
+    return {
+      ...hydrated,
+      evidence: enrichDemoEvidence(hydrated, snapshots, deltas[i]),
+      symbols: e.symbols ?? symbolNamesFromSnapshots(snapshots, hydrated),
+    };
+  });
+  const moduleEvolutions: ModuleEvolution[] = raw.moduleEvolutions.map((m: any) => ({
+    ...m,
+    moduleId: m.moduleId ?? `src-${m.module}`,
+    path: m.path ?? `src/${m.module}`,
+  }));
+
+  return {
+    ...raw,
+    language: raw.language ?? 'typescript',
+    snapshots,
+    deltas,
+    evolutionEvents,
+    moduleEvolutions,
+    layout: Object.keys(raw.layout ?? {}).length ? raw.layout : computeStableLayout(snapshots),
+  };
+}
+
+function enrichDemoEvidence(event: any, snapshots: any[], delta?: SnapshotDelta): EvolutionEvent['evidence'] {
+  const end = event.endCommit;
+  const base = (event.evidence ?? []).map((ev: any) => ({
+    ...ev,
+    commit: ev.commit ?? end,
+    url: ev.url ?? `https://github.com/example/agent-runtime/commit/${end}`,
+  }));
+  const from = snapshots.find((s) => s.id === (event.fromSnapshotId || delta?.fromSnapshotId));
+  const to = snapshots.find((s) => s.id === (event.toSnapshotId || delta?.toSnapshotId));
+  const files = event.changedFiles?.length ? event.changedFiles : (delta?.changedFiles ?? []);
+  for (const file of files.slice(0, 8)) {
+    if (!base.some((ev: any) => ev.file === file)) {
+      base.push({
+        kind: 'file_change',
+        description: file,
+        file,
+        commit: end,
+        url: `https://github.com/example/agent-runtime/blob/${end}/${file}`,
+      });
+    }
+  }
+  for (const ev of symbolEvidenceFromPair(from, to)) {
+    if (!base.some((item: any) => item.symbol === ev.symbol)) base.push(ev);
+  }
+  return base;
+}
+
+function symbolEvidenceFromPair(from: any, to: any): EvolutionEvent['evidence'] {
+  if (!to) return [];
+  const prev = new Map<string, Set<string>>((from?.modules ?? []).map((m: ModuleNode) => [m.id, new Set(m.symbols)]));
+  const out: EvolutionEvent['evidence'] = [];
+  for (const mod of to.modules as ModuleNode[]) {
+    const before = prev.get(mod.id) ?? new Set<string>();
+    for (const symbol of mod.symbols) {
+      if (!before.has(symbol)) {
+        out.push({
+          kind: 'symbol',
+          description: `+ ${mod.name}.${symbol}`,
+          symbol: `${mod.name}.${symbol}`,
+          module: mod.name,
+          file: mod.files[0],
+          commit: to.commit,
+        });
+      }
+    }
+  }
+  return out.slice(0, 8);
+}
+
+function symbolNamesFromSnapshots(snapshots: any[], event: any): string[] {
+  const from = snapshots.find((s) => s.id === event.fromSnapshotId);
+  const to = snapshots.find((s) => s.id === event.toSnapshotId);
+  return symbolEvidenceFromPair(from, to).map((e) => e.symbol!).filter(Boolean);
+}
 
 /** Pre-built demo analysis showcasing Repo Archaeologist capabilities */
-export const demoAnalysis: RepositoryAnalysis = {
+const rawDemo = {
   id: 'demo-agent-runtime',
   url: 'https://github.com/example/agent-runtime',
   name: 'agent-runtime',
@@ -176,6 +301,8 @@ export const demoAnalysis: RepositoryAnalysis = {
         { type: 'added', module: 'runtime', detail: 'New orchestration layer' },
         { type: 'split', module: 'agent', to: ['planner', 'executor'], detail: 'Agent split into Planner + Executor' },
       ],
+      splits: [{ from: 'agent', fromId: 'src-agent', to: ['planner', 'executor'], toIds: ['src-planner', 'src-executor'], confidence: 0.92 }],
+      changedFiles: ['src/planner/index.ts', 'src/executor/index.ts', 'src/runtime/index.ts'],
     },
     {
       fromSnapshotId: 'snap-d4e5f6a',
@@ -318,4 +445,8 @@ export const demoAnalysis: RepositoryAnalysis = {
     { timestamp: '2024-08-17T16:45:00Z', commit: 'd4e5f6789012345678901234567890abcdef0', shortCommit: 'd4e5f6a', label: '2024.08', snapshotId: 'snap-d4e5f6a', eventIds: ['event-3'] },
     { timestamp: '2025-01-20T11:00:00Z', commit: 'e5f6a7b89012345678901234567890abcdef01', shortCommit: 'e5f6a7b', label: '2025.01', snapshotId: 'snap-e5f6a7b', eventIds: ['event-4'] },
   ],
+  language: 'typescript',
+  layout: {},
 };
+
+export const demoAnalysis: RepositoryAnalysis = hydrateDemo(rawDemo);

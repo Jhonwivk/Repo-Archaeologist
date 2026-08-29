@@ -1,6 +1,6 @@
 {
   "name": "repo-archaeologist",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Reconstruct the architectural evolution of a software repository from Git history",
   "workspaces": [
@@ -9,11 +9,13 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run build",
     "dev": "concurrently \"npm run dev -w @repo-archaeologist/server\" \"npm run dev -w @repo-archaeologist/web\"",
     "dev:server": "npm run dev -w @repo-archaeologist/server",
     "dev:web": "npm run dev -w @repo-archaeologist/web",
     "analyze": "npm run analyze -w @repo-archaeologist/engine",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run build && npm run test --workspaces --if-present",
+    "start": "npm run start -w @repo-archaeologist/server"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

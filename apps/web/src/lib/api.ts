@@ -78,6 +78,13 @@ export const CHANGE_TYPE_ICONS: Record<string, string> = {
   added: '+',
   removed: '−',
   moved: '↗',
+  renamed: 'Aa',
   split: '⑂',
   merged: '⫘',
 };
+
+export async function fetchCases(): Promise<Array<{ id: string; title: string; description: string; owner: string; name: string }>> {
+  const res = await fetch(`${API_BASE}/cases`);
+  if (!res.ok) return [];
+  return res.json();
+}
