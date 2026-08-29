@@ -1,4 +1,4 @@
-/** Core IR types for Repo Archaeologist */
+/** Core IR types for Repo Archaeologist V1.1 */
 
 export type EvolutionEventType =
   | 'feature_introduction'
@@ -11,7 +11,7 @@ export type EvolutionEventType =
   | 'breaking_change'
   | 'other';
 
-export type ArchitectureChangeType = 'added' | 'removed' | 'moved' | 'split' | 'merged';
+export type ArchitectureChangeType = 'added' | 'removed' | 'moved' | 'renamed' | 'split' | 'merged';
 
 export interface DependencyEdge {
   from: string;
@@ -19,13 +19,23 @@ export interface DependencyEdge {
   weight: number;
 }
 
+export interface GraphPosition {
+  x: number;
+  y: number;
+}
+
 export interface ModuleNode {
+  /** Stable identity that survives moves/renames within a repository analysis. */
   id: string;
   name: string;
   path: string;
+  /** Path-based key before identity stabilization (e.g. src/agent). */
+  pathId: string;
+  packageName?: string;
   fileCount: number;
   linesOfCode: number;
   symbols: string[];
+  files: string[];
 }
 
 export interface Snapshot {
@@ -44,15 +54,28 @@ export interface Snapshot {
 export interface ArchitectureChange {
   type: ArchitectureChangeType;
   module: string;
+  moduleId?: string;
   detail?: string;
   from?: string;
   to?: string[];
+  confidence?: number;
 }
 
+export type EvidenceKind =
+  | 'commit_message'
+  | 'file_change'
+  | 'readme'
+  | 'module_delta'
+  | 'dependency_change'
+  | 'git_rename';
+
 export interface Evidence {
-  kind: 'commit_message' | 'file_change' | 'readme' | 'module_delta' | 'dependency_change';
+  kind: EvidenceKind;
   description: string;
   ref?: string;
+  commit?: string;
+  file?: string;
+  url?: string;
 }
 
 export interface EvolutionEvent {
@@ -68,6 +91,10 @@ export interface EvolutionEvent {
   changes: ArchitectureChange[];
   evidence: Evidence[];
   blastRadius: BlastRadius;
+  fromSnapshotId: string;
+  toSnapshotId: string;
+  changedFiles: string[];
+  confidence: number;
 }
 
 export interface BlastRadius {
@@ -78,7 +105,7 @@ export interface BlastRadius {
 }
 
 export interface ModuleLifecycleEvent {
-  kind: 'born' | 'first_implementation' | 'major_redesign' | 'split' | 'merge' | 'removed' | 'renamed';
+  kind: 'born' | 'first_implementation' | 'major_redesign' | 'split' | 'merge' | 'removed' | 'renamed' | 'moved';
   timestamp: string;
   commit: string;
   detail?: string;
@@ -86,13 +113,17 @@ export interface ModuleLifecycleEvent {
 }
 
 export interface ModuleEvolution {
+  moduleId: string;
   module: string;
+  path: string;
   bornAt?: string;
   bornCommit?: string;
   removedAt?: string;
   removedCommit?: string;
   renamedFrom?: string;
+  renamedTo?: string;
   splitFrom?: string;
+  splitInto?: string[];
   mergedInto?: string;
   events: ModuleLifecycleEvent[];
   currentDependencies: string[];
@@ -103,12 +134,16 @@ export interface SnapshotDelta {
   toSnapshotId: string;
   added: ModuleNode[];
   removed: ModuleNode[];
-  moved: Array<{ module: string; from: string; to: string }>;
+  moved: Array<{ module: string; moduleId: string; from: string; to: string; confidence: number }>;
+  renamed: Array<{ module: string; moduleId: string; from: string; to: string; confidence: number }>;
+  splits: Array<{ from: string; fromId: string; to: string[]; toIds: string[]; confidence: number }>;
+  merges: Array<{ from: string[]; fromIds: string[]; to: string; toId: string; confidence: number }>;
   dependencyChanges: {
     added: DependencyEdge[];
     removed: DependencyEdge[];
   };
   changes: ArchitectureChange[];
+  changedFiles: string[];
 }
 
 export interface RepositoryAnalysis {
@@ -119,11 +154,14 @@ export interface RepositoryAnalysis {
   analyzedAt: string;
   defaultBranch: string;
   totalCommits: number;
+  language: 'typescript' | 'javascript' | 'mixed';
   snapshots: Snapshot[];
   deltas: SnapshotDelta[];
   evolutionEvents: EvolutionEvent[];
   moduleEvolutions: ModuleEvolution[];
   timeline: TimelinePoint[];
+  /** Union-graph positions so nodes stay still across snapshots. */
+  layout: Record<string, GraphPosition>;
 }
 
 export interface TimelinePoint {
@@ -140,10 +178,20 @@ export interface AnalyzeOptions {
   minDaysBetweenSnapshots?: number;
   includeHighImpactCommits?: boolean;
   clusterWindowDays?: number;
+  maxCommits?: number;
+  cloneDepth?: number;
 }
 
 export interface AnalyzeProgress {
   stage: 'cloning' | 'scanning' | 'selecting_commits' | 'building_snapshots' | 'detecting_changes' | 'clustering_events' | 'complete' | 'error';
   progress: number;
   message: string;
+}
+
+export interface FeaturedCase {
+  id: string;
+  title: string;
+  description: string;
+  owner: string;
+  name: string;
 }

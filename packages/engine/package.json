@@ -1,6 +1,6 @@
 {
   "name": "@repo-archaeologist/engine",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -14,14 +14,15 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "analyze": "node dist/cli.js",
-    "test": "node --test dist/**/*.test.js"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/*.test.js"
   },
   "dependencies": {
     "@repo-archaeologist/core": "*",
-    "simple-git": "^3.27.0"
+    "simple-git": "^3.27.0",
+    "typescript": "^5.7.3"
   },
   "devDependencies": {
-    "@types/node": "^22.10.5",
-    "typescript": "^5.7.3"
+    "@types/node": "^22.10.5"
   }
 }

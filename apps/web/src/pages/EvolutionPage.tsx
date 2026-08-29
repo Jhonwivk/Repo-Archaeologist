@@ -5,12 +5,14 @@ import { fetchDemo, fetchAnalysis, fetchProgress, getSnapshotAtIndex, formatDate
 import Timeline from '../components/Timeline';
 import ArchitectureGraph from '../components/ArchitectureGraph';
 import EventPanel, { EventDetail } from '../components/EventPanel';
+import BeforeAfter, { GenealogyPanel } from '../components/BeforeAfter';
 
 export default function EvolutionPage() {
   const { id } = useParams<{ id: string }>();
   const [analysis, setAnalysis] = useState<RepositoryAnalysis | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedEventId, setSelectedEventId] = useState<string | undefined>();
+  const [selectedModuleId, setSelectedModuleId] = useState<string | undefined>();
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState({ stage: 'loading', progress: 0, message: 'Loading...' });
   const [isPlaying, setIsPlaying] = useState(false);
@@ -22,20 +24,19 @@ export default function EvolutionPage() {
     const load = async () => {
       setLoading(true);
       try {
-        if (id === 'demo') {
-          const data = await fetchDemo();
+        if (id === 'demo' || id === 'evolution-lab') {
+          const data = await fetchAnalysis(id).catch(() => (id === 'demo' ? fetchDemo() : Promise.reject()));
           setAnalysis(data);
-          setCurrentIndex(data.snapshots.length - 1);
+          setCurrentIndex(Math.max(0, data.snapshots.length - 1));
           setLoading(false);
           return;
         }
 
-        // Poll for real analysis
         const poll = async () => {
           try {
             const data = await fetchAnalysis(id);
             setAnalysis(data);
-            setCurrentIndex(data.snapshots.length - 1);
+            setCurrentIndex(Math.max(0, data.snapshots.length - 1));
             setLoading(false);
           } catch (err) {
             if (err instanceof Error && err.message === 'IN_PROGRESS') {
@@ -68,6 +69,7 @@ export default function EvolutionPage() {
     }
 
     setIsPlaying(true);
+    setSelectedEventId(undefined);
     setCurrentIndex(0);
     let idx = 0;
 
@@ -95,10 +97,7 @@ export default function EvolutionPage() {
         <p className="text-gray-400 text-sm">{progress.message}</p>
         {progress.progress > 0 && (
           <div className="w-64 h-1.5 bg-surface-overlay rounded-full overflow-hidden">
-            <div
-              className="h-full bg-archaeologist-500 rounded-full transition-all duration-500"
-              style={{ width: `${progress.progress}%` }}
-            />
+            <div className="h-full bg-archaeologist-500 rounded-full transition-all duration-500" style={{ width: `${progress.progress}%` }} />
           </div>
         )}
       </div>
@@ -119,23 +118,31 @@ export default function EvolutionPage() {
   const selectedEvent = selectedEventId
     ? analysis.evolutionEvents.find((e) => e.id === selectedEventId)
     : undefined;
+  const selectedGenealogy = selectedModuleId
+    ? analysis.moduleEvolutions.find((m) => m.moduleId === selectedModuleId || m.module === selectedModuleId)
+    : undefined;
 
   const highlightModules = selectedEvent?.affectedModules ?? [];
 
+  const selectEvent = (eventId: string) => {
+    setSelectedEventId(eventId);
+    setSelectedModuleId(undefined);
+    const event = analysis.evolutionEvents.find((e) => e.id === eventId);
+    if (!event) return;
+    const idx = analysis.snapshots.findIndex((s) => s.id === event.toSnapshotId);
+    if (idx >= 0) setCurrentIndex(idx);
+  };
+
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Header */}
       <header className="border-b border-surface-border px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Link to="/" className="text-gray-500 hover:text-gray-300 transition-colors text-sm">
-            ← Back
-          </Link>
+          <Link to="/" className="text-gray-500 hover:text-gray-300 transition-colors text-sm">← Back</Link>
           <div>
-            <h1 className="text-sm font-semibold text-gray-200">
-              {analysis.owner}/{analysis.name}
-            </h1>
+            <h1 className="text-sm font-semibold text-gray-200">{analysis.owner}/{analysis.name}</h1>
             <p className="text-xs text-gray-500">
               {analysis.totalCommits} commits · {analysis.snapshots.length} snapshots · {analysis.evolutionEvents.length} events
+              {analysis.language ? ` · ${analysis.language}` : ''}
             </p>
           </div>
         </div>
@@ -148,25 +155,38 @@ export default function EvolutionPage() {
         </button>
       </header>
 
-      {/* Main content */}
       <div className="flex-1 flex flex-col lg:flex-row">
-        {/* Architecture graph */}
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-w-0">
           <div className="px-6 pt-4 pb-2">
-            <h2 className="text-xs font-medium text-gray-500 uppercase tracking-wider">Architecture Snapshot</h2>
-            <p className="text-sm text-gray-400 mt-0.5">{snapshot.message}</p>
+            <h2 className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+              {selectedEvent ? 'Before / After' : 'Architecture Snapshot'}
+            </h2>
+            <p className="text-sm text-gray-400 mt-0.5">
+              {selectedEvent ? selectedEvent.title : snapshot.message}
+            </p>
           </div>
 
-          <div className="flex-1 card mx-4 mb-4 min-h-[360px]">
-            <ArchitectureGraph
-              modules={snapshot.modules}
-              dependencies={snapshot.dependencies}
-              highlightModules={highlightModules}
-              previousModules={prevSnapshot?.modules}
-            />
+          <div className="flex-1 mx-4 mb-4 min-h-[360px]">
+            {selectedEvent ? (
+              <BeforeAfter
+                analysis={analysis}
+                event={selectedEvent}
+                onModuleClick={(id) => setSelectedModuleId(id)}
+              />
+            ) : (
+              <div className="card h-full">
+                <ArchitectureGraph
+                  modules={snapshot.modules}
+                  dependencies={snapshot.dependencies}
+                  layout={analysis.layout}
+                  highlightModules={highlightModules}
+                  previousModules={prevSnapshot?.modules}
+                  onModuleClick={(m) => setSelectedModuleId(m.id)}
+                />
+              </div>
+            )}
           </div>
 
-          {/* Timeline */}
           <div className="border-t border-surface-border bg-surface-raised">
             <Timeline
               timeline={analysis.timeline}
@@ -180,19 +200,18 @@ export default function EvolutionPage() {
           </div>
         </div>
 
-        {/* Side panel */}
-        <div className="w-full lg:w-96 border-t lg:border-t-0 lg:border-l border-surface-border bg-surface-raised overflow-y-auto max-h-[50vh] lg:max-h-none">
-          {selectedEvent ? (
+        <div className="w-full lg:w-[26rem] border-t lg:border-t-0 lg:border-l border-surface-border bg-surface-raised overflow-y-auto max-h-[50vh] lg:max-h-none">
+          {selectedGenealogy ? (
+            <GenealogyPanel evolution={selectedGenealogy} onClose={() => setSelectedModuleId(undefined)} />
+          ) : selectedEvent ? (
             <EventDetail event={selectedEvent} onClose={() => setSelectedEventId(undefined)} />
           ) : (
             <>
               <EventPanel
                 events={analysis.evolutionEvents}
                 selectedEventId={selectedEventId}
-                onSelectEvent={setSelectedEventId}
+                onSelectEvent={selectEvent}
               />
-
-              {/* Delta summary for current transition */}
               {currentIndex > 0 && analysis.deltas[currentIndex - 1]?.changes.length > 0 && (
                 <div className="p-4 border-t border-surface-border">
                   <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
