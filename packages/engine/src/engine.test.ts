@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { selectImportantCommits } from './commit-selector.js';
 import { ChangeDetector, summarizeDelta } from './change-detector.js';
 import { classifyEventType } from './event-clusterer.js';
-import { detectModulePath, parseSourceFile } from './snapshot-builder.js';
+import { detectModulePath, parseSourceFile, resolveSpecifier } from './snapshot-builder.js';
 import { parseTsJs, resolvePathAlias, aliasesFromPaths } from './languages/ts-js.js';
 import { matchModules, pathToModuleId } from './module-identity.js';
 import type { Snapshot, ModuleNode } from '@repo-archaeologist/core';
@@ -60,6 +60,41 @@ describe('snapshot-builder', () => {
     assert.ok(symbols.includes('execute'));
     assert.ok(imports.includes('./tools'));
     assert.ok(imports.includes('./helper'));
+  });
+
+  it('resolves relative imports from the importing source file and supports index files', () => {
+    const fileToModule = new Map([
+      ['src/feature/deep/entry.ts', 'src/feature'],
+      ['src/shared/util.ts', 'src/shared'],
+      ['src/shared/index.ts', 'src/shared'],
+      ['src/other/index.ts', 'src/other'],
+    ]);
+
+    assert.equal(
+      resolveSpecifier('../../shared/util', 'src/feature/deep/entry.ts', [], new Map(), fileToModule, []),
+      'src/shared'
+    );
+    assert.equal(
+      resolveSpecifier('../shared', 'src/feature/entry.ts', [], new Map(), fileToModule, []),
+      'src/shared'
+    );
+    assert.equal(
+      resolveSpecifier('../../other', 'src/feature/deep/entry.ts', [], new Map(), fileToModule, []),
+      'src/other'
+    );
+  });
+
+  it('leaves unresolved relative and external imports without a target', () => {
+    const fileToModule = new Map([['src/app/index.ts', 'src/app']]);
+
+    assert.equal(
+      resolveSpecifier('../missing', 'src/app/index.ts', [], new Map(), fileToModule, []),
+      null
+    );
+    assert.equal(
+      resolveSpecifier('lodash', 'src/app/index.ts', [], new Map(), fileToModule, []),
+      null
+    );
   });
 });
 

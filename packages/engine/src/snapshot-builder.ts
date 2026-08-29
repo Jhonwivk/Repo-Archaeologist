@@ -252,12 +252,13 @@ function moduleForResolvedPath(
     const direct = fileToModule.get(candidate);
     if (direct) return direct;
   }
-  const modulePath = detectModulePath(resolved, workspaces);
-  return modulePath;
+  // A guessed directory is not a dependency target. Requiring a concrete
+  // source file keeps unresolved imports out of the reconstructed graph.
+  return null;
 }
 
 function expandResolved(resolved: string): string[] {
-  const stripped = resolved.replace(/\.(js|jsx|ts|tsx|mjs|cjs)$/, '');
+  const stripped = resolved.replace(/\.(js|jsx|ts|tsx|mts|cts|mjs|cjs)$/, '');
   const out: string[] = [resolved, stripped];
   for (const ext of SOURCE_EXT) {
     out.push(`${stripped}${ext}`);
