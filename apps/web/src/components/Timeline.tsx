@@ -11,80 +11,66 @@ export default function Timeline({ timeline, currentIndex, onIndexChange, isPlay
   if (timeline.length === 0) return null;
 
   const current = timeline[currentIndex];
+  const max = Math.max(timeline.length - 1, 1);
+  const pct = (currentIndex / max) * 100;
 
   return (
     <div className="px-6 py-4">
-      {/* Date labels */}
       <div className="flex justify-between mb-2 text-xs text-gray-500 font-mono">
-        {timeline.map((point, i) => (
-          <span
-            key={point.snapshotId}
-            className={`transition-colors ${i === currentIndex ? 'text-archaeologist-400 font-medium' : ''}`}
-          >
-            {point.label}
-          </span>
-        ))}
-      </div>
-
-      {/* Track */}
-      <div className="relative h-2 bg-surface-overlay rounded-full">
-        {/* Progress fill */}
-        <div
-          className="absolute h-full bg-archaeologist-600/30 rounded-full transition-all duration-300"
-          style={{ width: `${(currentIndex / (timeline.length - 1)) * 100}%` }}
-        />
-
-        {/* Snap points */}
         {timeline.map((point, i) => (
           <button
             key={point.snapshotId}
+            type="button"
             onClick={() => onIndexChange(i)}
-            className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full border-2 transition-all duration-200 ${
+            className={`transition-colors ${i === currentIndex ? 'text-archaeologist-400 font-medium' : 'hover:text-gray-300'}`}
+          >
+            {point.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="relative h-8 flex items-center">
+        <div className="absolute left-0 right-0 h-2 bg-surface-overlay rounded-full pointer-events-none">
+          <div
+            className="absolute h-full bg-archaeologist-600/40 rounded-full"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+
+        {timeline.map((point, i) => (
+          <div
+            key={point.snapshotId}
+            className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full border-2 pointer-events-none ${
               i === currentIndex
-                ? 'bg-archaeologist-500 border-archaeologist-400 scale-125'
+                ? 'bg-archaeologist-500 border-white scale-125 z-[1]'
                 : i < currentIndex
                 ? 'bg-archaeologist-600 border-archaeologist-500'
-                : 'bg-surface-raised border-surface-border hover:border-gray-500'
-            } ${point.eventIds.length > 0 ? 'ring-2 ring-amber-400/30' : ''}`}
-            style={{ left: `${(i / (timeline.length - 1)) * 100}%` }}
-            title={`${point.label} — ${point.shortCommit}`}
+                : 'bg-surface-raised border-surface-border'
+            } ${point.eventIds.length > 0 ? 'ring-2 ring-amber-400/40' : ''}`}
+            style={{ left: `${(i / max) * 100}%` }}
           />
         ))}
 
-        {/* Current indicator */}
-        <div
-          className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-5 h-5 rounded-full bg-archaeologist-500 border-2 border-white shadow-lg shadow-archaeologist-500/30 transition-all duration-300 ${isPlaying ? 'animate-pulse-soft' : ''}`}
-          style={{ left: `${(currentIndex / (timeline.length - 1)) * 100}%` }}
+        <input
+          type="range"
+          min={0}
+          max={max}
+          step={1}
+          value={currentIndex}
+          aria-label="Architecture timeline"
+          onChange={(e) => onIndexChange(Number(e.target.value))}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
         />
       </div>
 
-      {/* Slider */}
-      <input
-        type="range"
-        min={0}
-        max={timeline.length - 1}
-        value={currentIndex}
-        onChange={(e) => onIndexChange(Number(e.target.value))}
-        className="w-full mt-3 h-1 appearance-none bg-transparent cursor-pointer
-          [&::-webkit-slider-thumb]:appearance-none
-          [&::-webkit-slider-thumb]:w-4
-          [&::-webkit-slider-thumb]:h-4
-          [&::-webkit-slider-thumb]:rounded-full
-          [&::-webkit-slider-thumb]:bg-archaeologist-500
-          [&::-webkit-slider-thumb]:cursor-pointer
-          [&::-webkit-slider-thumb]:border-2
-          [&::-webkit-slider-thumb]:border-white
-          [&::-webkit-slider-thumb]:shadow-lg"
-      />
-
-      {/* Current date display */}
-      <div className="text-center mt-2">
-        <span className="text-lg font-mono font-medium text-gray-200">
+      <div className="text-center mt-3">
+        <span className={`text-lg font-mono font-medium text-gray-200 ${isPlaying ? 'animate-pulse-soft' : ''}`}>
           {current ? new Date(current.timestamp).toISOString().slice(0, 10) : ''}
         </span>
         {current && (
           <span className="ml-3 text-sm text-gray-500 font-mono">{current.shortCommit}</span>
         )}
+        <p className="text-[11px] text-gray-600 mt-1">Drag to replay architecture at that commit</p>
       </div>
     </div>
   );

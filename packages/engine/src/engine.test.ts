@@ -83,7 +83,7 @@ describe('change-detector', () => {
     const from: Snapshot = {
       id: 's1', commit: 'a', shortCommit: 'a', timestamp: '2024-01-01', message: '', author: '',
       modules: [mod('src/core', ['src/core/index.ts'], ['LLMClient'])],
-      dependencies: [], totalFiles: 1, totalLines: 40,
+      dependencies: [], totalFiles: 1, totalLines: 40, reconstructedFrom: 'git+typescript-ast', fingerprint: 't',
     };
     const to: Snapshot = {
       id: 's2', commit: 'b', shortCommit: 'b', timestamp: '2024-06-01', message: '', author: '',
@@ -91,7 +91,7 @@ describe('change-detector', () => {
         mod('src/core', ['src/core/index.ts'], ['LLMClient']),
         mod('src/agent', ['src/agent/index.ts'], ['Agent']),
       ],
-      dependencies: [], totalFiles: 2, totalLines: 80,
+      dependencies: [], totalFiles: 2, totalLines: 80, reconstructedFrom: 'git+typescript-ast', fingerprint: 't',
     };
     const delta = detector.detectDelta(from, to);
     assert.equal(delta.added.length, 1);
@@ -105,12 +105,12 @@ describe('change-detector', () => {
     const from: Snapshot = {
       id: 's1', commit: 'a', shortCommit: 'a', timestamp: '2024-01-01', message: '', author: '',
       modules: [mod('src/core', ['src/core/index.ts'], ['LLMClient'])],
-      dependencies: [], totalFiles: 1, totalLines: 40,
+      dependencies: [], totalFiles: 1, totalLines: 40, reconstructedFrom: 'git+typescript-ast', fingerprint: 't',
     };
     const to: Snapshot = {
       id: 's2', commit: 'b', shortCommit: 'b', timestamp: '2024-06-01', message: '', author: '',
       modules: [mod('src/runtime', ['src/runtime/index.ts'], ['LLMClient'])],
-      dependencies: [], totalFiles: 1, totalLines: 40,
+      dependencies: [], totalFiles: 1, totalLines: 40, reconstructedFrom: 'git+typescript-ast', fingerprint: 't',
     };
     const delta = detector.detectDelta(from, to, [{ from: 'src/core/index.ts', to: 'src/runtime/index.ts', score: 100 }]);
     assert.equal(delta.moved.length, 1);
@@ -125,7 +125,7 @@ describe('change-detector', () => {
     const from: Snapshot = {
       id: 's1', commit: 'a', shortCommit: 'a', timestamp: '2024-01-01', message: '', author: '',
       modules: [mod('src/agent', ['src/agent/agent.ts', 'src/agent/tools.ts'], ['Agent', 'ToolRegistry'])],
-      dependencies: [], totalFiles: 2, totalLines: 80,
+      dependencies: [], totalFiles: 2, totalLines: 80, reconstructedFrom: 'git+typescript-ast', fingerprint: 't',
     };
     const to: Snapshot = {
       id: 's2', commit: 'b', shortCommit: 'b', timestamp: '2024-06-01', message: '', author: '',
@@ -133,7 +133,7 @@ describe('change-detector', () => {
         mod('src/planner', ['src/planner/agent.ts'], ['Agent']),
         mod('src/executor', ['src/executor/tools.ts'], ['ToolRegistry']),
       ],
-      dependencies: [], totalFiles: 2, totalLines: 80,
+      dependencies: [], totalFiles: 2, totalLines: 80, reconstructedFrom: 'git+typescript-ast', fingerprint: 't',
     };
     const delta = detector.detectDelta(from, to, [
       { from: 'src/agent/agent.ts', to: 'src/planner/agent.ts', score: 100 },
@@ -150,7 +150,7 @@ describe('change-detector', () => {
     const from: Snapshot = {
       id: 's1', commit: 'a', shortCommit: 'a', timestamp: '2024-01-01', message: '', author: '',
       modules: [mod('src/agent', ['src/agent/run.ts'], ['run'])],
-      dependencies: [], totalFiles: 1, totalLines: 40,
+      dependencies: [], totalFiles: 1, totalLines: 40, reconstructedFrom: 'git+typescript-ast', fingerprint: 't',
     };
     const to: Snapshot = {
       id: 's2', commit: 'b', shortCommit: 'b', timestamp: '2024-06-01', message: '', author: '',
@@ -158,7 +158,7 @@ describe('change-detector', () => {
         mod('src/agent', ['src/agent/run.ts'], ['run']),
         mod('src/agency', ['src/agency/other.ts'], ['Other']),
       ],
-      dependencies: [], totalFiles: 2, totalLines: 80,
+      dependencies: [], totalFiles: 2, totalLines: 80, reconstructedFrom: 'git+typescript-ast', fingerprint: 't',
     };
     const delta = detector.detectDelta(from, to);
     assert.equal(delta.splits.length, 0);

@@ -37,9 +37,15 @@ export function evaluateAnalysis(analysis: RepositoryAnalysis, truth: GroundTrut
     ? 1
     : structuralHits.filter((ev) => eventMatches(analysis, ev)).length / structuralHits.length;
 
-  const withEvidence = analysis.evolutionEvents.filter((e) =>
-    e.evidence.some((ev) => ev.kind === 'commit_message' && Boolean(ev.commit || ev.ref))
-  );
+  const withEvidence = analysis.evolutionEvents.filter((e) => {
+    const hasCommit = e.evidence.some((ev) => ev.kind === 'commit_message' && Boolean(ev.commit || ev.ref));
+    const structural = e.type === 'module_split' || e.type === 'module_merge' || e.type === 'architecture_migration'
+      || e.changes.some((c) => c.type === 'split' || c.type === 'merged' || c.type === 'moved');
+    if (!structural) return hasCommit;
+    const hasFile = e.evidence.some((ev) => ev.kind === 'file_change' && Boolean(ev.file)) || e.changedFiles.length > 0;
+    const hasSymbol = e.evidence.some((ev) => ev.kind === 'symbol' && Boolean(ev.symbol)) || (e.symbols?.length ?? 0) > 0;
+    return hasCommit && hasFile && hasSymbol;
+  });
   const evidenceValidity = analysis.evolutionEvents.length === 0
     ? 1
     : withEvidence.length / analysis.evolutionEvents.length;

@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { snapshotFingerprint, graphStructure } from '@repo-archaeologist/core';
 import { createEvolutionLabFixture } from './eval/fixture.js';
 import { evolutionLabGroundTruth, selfRepoGroundTruth } from './eval/ground-truth.js';
 import { evaluateAnalysis } from './eval/metrics.js';
 import { RepositoryAnalyzer } from './analyzer.js';
+import { SimpleGitAnalyzer } from './git/analyzer.js';
+import { SnapshotBuilder } from './snapshot-builder.js';
 
 const FIXTURE_OPTIONS = {
   minDaysBetweenSnapshots: 0,
@@ -50,6 +53,30 @@ describe('e2e evolution-lab fixture', () => {
       assert.ok(event.toSnapshotId, `${event.id} missing toSnapshotId`);
     }
 
+    const structural = analysis.evolutionEvents.filter((e) =>
+      e.type === 'module_split' || e.type === 'module_merge' || e.type === 'architecture_migration'
+      || e.changes.some((c) => c.type === 'split' || c.type === 'merged' || c.type === 'moved')
+    );
+    assert.ok(structural.length >= 1, 'expected structural events');
+    for (const event of structural) {
+      assert.ok(
+        event.evidence.some((ev) => ev.kind === 'commit_message' && (ev.commit || ev.ref)),
+        `${event.id} missing commit evidence`
+      );
+      assert.ok(
+        event.changedFiles.length > 0 || event.evidence.some((ev) => ev.kind === 'file_change' && ev.file),
+        `${event.id} missing file evidence`
+      );
+      assert.ok(
+        (event.symbols?.length ?? 0) > 0 || event.evidence.some((ev) => ev.kind === 'symbol' && ev.symbol),
+        `${event.id} missing symbol evidence`
+      );
+    }
+
+    const fingerprints = analysis.snapshots.map((s) => s.fingerprint);
+    const unique = new Set(fingerprints);
+    assert.ok(unique.size >= 3, `timeline fingerprints must change, got ${unique.size} unique of ${fingerprints.length}`);
+
     const metrics = evaluateAnalysis(analysis, evolutionLabGroundTruth);
     assert.ok(metrics.modulePrecision >= 0.85, `module precision ${metrics.modulePrecision}`);
     assert.ok(metrics.moduleRecall >= 0.85, `module recall ${metrics.moduleRecall}`);
@@ -58,8 +85,51 @@ describe('e2e evolution-lab fixture', () => {
     assert.ok(metrics.evidenceValidity >= 0.99, `evidence validity ${metrics.evidenceValidity}`);
   });
 
+  it('rebuilds the same snapshot from the git tree and TypeScript AST', async () => {
+    if (!dir) {
+      dir = await mkdtemp(join(tmpdir(), 'evolution-lab-'));
+      await createEvolutionLabFixture(dir);
+    }
+
+    const git = new SimpleGitAnalyzer(dir);
+    await git.open(dir);
+    const commits = await git.getCommits('main', 20);
+    const initial = commits[commits.length - 1];
+    const builder = new SnapshotBuilder(git);
+
+    const first = await builder.buildSnapshot(initial);
+    const second = await builder.buildSnapshot(initial);
+
+    assert.equal(first.reconstructedFrom, 'git+typescript-ast');
+    assert.equal(first.fingerprint, second.fingerprint);
+    assert.deepEqual(
+      first.modules.map((m) => m.path).sort(),
+      ['src/cli', 'src/core']
+    );
+    assert.ok(first.modules.find((m) => m.path === 'src/core')?.symbols.includes('LLMClient'));
+    assert.ok(first.modules.find((m) => m.path === 'src/cli')?.symbols.includes('main'));
+
+    const edges = first.dependencies.map((e) => {
+      const from = first.modules.find((m) => m.id === e.from)?.path;
+      const to = first.modules.find((m) => m.id === e.to)?.path;
+      return `${from}->${to}`;
+    });
+    assert.ok(edges.includes('src/cli->src/core'), `expected cli→core from the import, got ${edges.join(', ')}`);
+    assert.ok((first.dependencies[0]?.via ?? []).some((s) => s.includes('core')), 'edge must cite the import specifier');
+  });
+
   after(async () => {
     if (dir) await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe('timeline graph structure', () => {
+  it('changes node/edge sets across demo snapshots', async () => {
+    const { demoAnalysis } = await import('./demo-data.js');
+    const structures = demoAnalysis.snapshots.map((s) => graphStructure(s));
+    assert.notDeepEqual(structures[0].nodes, structures[structures.length - 1].nodes);
+    const fingerprints = demoAnalysis.snapshots.map((s) => snapshotFingerprint(s));
+    assert.ok(new Set(fingerprints).size >= 4);
   });
 });
 

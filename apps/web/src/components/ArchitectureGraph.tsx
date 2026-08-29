@@ -53,19 +53,20 @@ export default function ArchitectureGraph({
           </marker>
         </defs>
 
-        {dependencies.map((dep, i) => {
+        {dependencies.map((dep) => {
           const from = positions[dep.from];
           const to = positions[dep.to];
           if (!from || !to) return null;
           return (
             <line
-              key={`edge-${i}`}
+              key={`${dep.from}->${dep.to}`}
               x1={from.x}
               y1={from.y + 24}
               x2={to.x}
               y2={to.y - 24}
-              stroke="#2a2a3a"
-              strokeWidth={Math.min(dep.weight, 3)}
+              stroke="#4c6ef5"
+              strokeOpacity={0.55}
+              strokeWidth={Math.min(Math.max(dep.weight, 1), 3)}
               markerEnd="url(#arrowhead)"
             />
           );
@@ -94,7 +95,7 @@ export default function ArchitectureGraph({
               key={mod.id}
               transform={`translate(${pos.x - 60}, ${pos.y - 24})`}
               className="cursor-pointer"
-              style={{ transition: 'transform 400ms ease' }}
+              data-module={mod.name}
               onClick={() => onModuleClick?.(mod)}
             >
               <rect
