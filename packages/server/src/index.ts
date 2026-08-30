@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
+const HOST = process.env.HOST ?? '0.0.0.0';
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 2);
 const ANALYZE_TIMEOUT_MS = Number(process.env.ANALYZE_TIMEOUT_MS ?? 180_000);
 const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), 'data');
@@ -215,6 +216,6 @@ if (existsSync(webDist)) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Repo Archaeologist API running on http://localhost:${PORT}`);
+app.listen(Number(PORT), HOST, () => {
+  console.log(`Repo Archaeologist API running on http://${HOST}:${PORT}`);
 });
