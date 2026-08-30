@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { EvolutionEvent } from '@repo-archaeologist/core';
 import { EVENT_TYPE_LABELS, EVENT_TYPE_COLORS, CHANGE_TYPE_ICONS, formatDate } from '../lib/api';
 
@@ -34,11 +35,12 @@ export default function EventPanel({ events, selectedEventId, onSelectEvent }: P
               {EVENT_TYPE_LABELS[event.type] ?? 'Change'}
             </span>
             <span className="text-xs text-gray-500">{formatDate(event.period.end)}</span>
+            {typeof event.confidence === 'number' && (
+              <span className="ml-auto text-[10px] text-gray-500">{Math.round(event.confidence * 100)}%</span>
+            )}
           </div>
           <p className="text-sm font-medium text-gray-200 mb-1">{event.title}</p>
           <p className="text-xs text-gray-400 line-clamp-2">{event.summary}</p>
-
-          {/* Changes preview */}
           <div className="flex flex-wrap gap-1.5 mt-2">
             {event.changes.slice(0, 4).map((change, i) => (
               <span key={i} className="text-xs font-mono text-gray-500">
@@ -75,58 +77,119 @@ export function EventDetail({ event, onClose }: EventDetailProps) {
 
       <p className="text-sm text-gray-300 mb-4">{event.summary}</p>
 
-      {/* Changes */}
-      <div className="mb-4">
-        <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Changes</h4>
-        <div className="space-y-1.5">
-          {event.changes.map((change, i) => (
-            <div key={i} className="flex items-center gap-2 text-sm">
-              <span className="w-5 text-center font-mono text-gray-400">{CHANGE_TYPE_ICONS[change.type]}</span>
-              <span className="text-gray-300">{change.module}</span>
-              {change.detail && <span className="text-gray-500 text-xs">— {change.detail}</span>}
-            </div>
-          ))}
+      <div className="mb-4 flex items-center gap-2">
+        <span className="text-xs text-gray-500 uppercase tracking-wider">Confidence</span>
+        <div className="flex-1 h-1.5 bg-surface-overlay rounded-full overflow-hidden">
+          <div className="h-full bg-archaeologist-500" style={{ width: `${Math.round((event.confidence ?? 0.7) * 100)}%` }} />
         </div>
+        <span className="text-xs font-mono text-gray-400">{Math.round((event.confidence ?? 0.7) * 100)}%</span>
       </div>
 
-      {/* Evidence */}
-      <div className="mb-4">
-        <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Evidence</h4>
-        <div className="space-y-1">
-          {event.evidence.map((ev, i) => (
-            <div key={i} className="flex items-start gap-2 text-xs text-gray-400">
-              <span className="text-gray-600 mt-0.5">├─</span>
-              <span>{ev.description}{ev.ref && <span className="ml-1 font-mono text-gray-500">{ev.ref}</span>}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Blast radius heatmap */}
-      {Object.keys(event.blastRadius.heatmap).length > 0 && (
-        <div>
-          <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Blast Radius</h4>
-          <div className="space-y-1">
-            {Object.entries(event.blastRadius.heatmap)
-              .sort(([, a], [, b]) => b - a)
-              .map(([path, count]) => (
-                <div key={path} className="flex items-center gap-2 text-xs">
-                  <span className="w-24 font-mono text-gray-400 truncate">{path}</span>
-                  <div className="flex-1 h-2 bg-surface-overlay rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-archaeologist-500/60 rounded-full"
-                      style={{ width: `${Math.min(count * 25, 100)}%` }}
-                    />
-                  </div>
-                  <span className="text-gray-500 w-6 text-right">{count}</span>
-                </div>
-              ))}
+      <Section title="What changed">
+        {event.changes.map((change, i) => (
+          <div key={i} className="flex items-center gap-2 text-sm">
+            <span className="w-5 text-center font-mono text-gray-400">{CHANGE_TYPE_ICONS[change.type]}</span>
+            <span className="text-gray-300">{change.module}</span>
+            {change.detail && <span className="text-gray-500 text-xs">— {change.detail}</span>}
           </div>
+        ))}
+      </Section>
+
+      <Section title="Affected modules">
+        <div className="flex flex-wrap gap-1">
+          {event.affectedModules.map((m) => (
+            <span key={m} className="px-2 py-0.5 rounded bg-surface-overlay text-xs text-gray-300">{m}</span>
+          ))}
+        </div>
+      </Section>
+
+      <Section title="Supporting commits">
+        {event.evidence.filter((e) => e.kind === 'commit_message').map((ev, i) => (
+          <EvidenceLine key={i} ev={ev} />
+        ))}
+      </Section>
+
+      {event.changedFiles.length > 0 && (
+        <Section title="Changed files">
+          {event.changedFiles.slice(0, 12).map((file) => {
+            const ev = event.evidence.find((e) => e.file === file);
+            return ev?.url ? (
+              <a key={file} href={ev.url} target="_blank" rel="noreferrer" className="block text-xs font-mono text-archaeologist-300 hover:text-archaeologist-200 truncate">
+                {file}
+              </a>
+            ) : (
+              <div key={file} className="text-xs font-mono text-gray-400 truncate">{file}</div>
+            );
+          })}
+        </Section>
+      )}
+
+      {(event.symbols?.length > 0 || event.evidence.some((e) => e.kind === 'symbol')) && (
+        <Section title="Symbols">
+          {(event.evidence.filter((e) => e.kind === 'symbol').length
+            ? event.evidence.filter((e) => e.kind === 'symbol')
+            : (event.symbols ?? []).map((symbol) => ({ kind: 'symbol' as const, description: symbol, symbol }))
+          ).map((ev, i) => (
+            <div key={`${ev.symbol}-${i}`} className="text-xs font-mono text-amber-300">
+              {ev.description}
+              {'file' in ev && ev.file && <span className="ml-2 text-gray-500">{ev.file}</span>}
+            </div>
+          ))}
+        </Section>
+      )}
+
+      <Section title="Evidence">
+        {event.evidence.filter((e) => e.kind !== 'commit_message' && e.kind !== 'file_change' && e.kind !== 'symbol').map((ev, i) => (
+          <EvidenceLine key={i} ev={ev} />
+        ))}
+      </Section>
+
+      {Object.keys(event.blastRadius.heatmap).length > 0 && (
+        <Section title="Blast radius">
+          {Object.entries(event.blastRadius.heatmap)
+            .sort(([, a], [, b]) => b - a)
+            .map(([path, count]) => (
+              <div key={path} className="flex items-center gap-2 text-xs">
+                <span className="w-24 font-mono text-gray-400 truncate">{path}</span>
+                <div className="flex-1 h-2 bg-surface-overlay rounded-full overflow-hidden">
+                  <div className="h-full bg-archaeologist-500/60 rounded-full" style={{ width: `${Math.min(count * 25, 100)}%` }} />
+                </div>
+                <span className="text-gray-500 w-6 text-right">{count}</span>
+              </div>
+            ))}
           <p className="text-xs text-gray-500 mt-2">
             {event.blastRadius.filesChanged} files · {event.blastRadius.modulesAffected} modules · {event.blastRadius.dependenciesChanged} dependency changes
           </p>
-        </div>
+        </Section>
       )}
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="mb-4">
+      <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">{title}</h4>
+      <div className="space-y-1.5">{children}</div>
+    </div>
+  );
+}
+
+function EvidenceLine({ ev }: { ev: EvolutionEvent['evidence'][number] }) {
+  const inner = (
+    <span>
+      {ev.description}
+      {ev.ref && <span className="ml-1 font-mono text-gray-500">{ev.ref}</span>}
+    </span>
+  );
+  return (
+    <div className="flex items-start gap-2 text-xs text-gray-400">
+      <span className="text-gray-600 mt-0.5">├─</span>
+      {ev.url ? (
+        <a href={ev.url} target="_blank" rel="noreferrer" className="text-archaeologist-300 hover:text-archaeologist-200">
+          {inner}
+        </a>
+      ) : inner}
     </div>
   );
 }

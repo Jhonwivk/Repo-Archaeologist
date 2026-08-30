@@ -1,242 +1,279 @@
+import { posix as path } from 'node:path';
 import type { ModuleNode, DependencyEdge, Snapshot } from '@repo-archaeologist/core';
-import type { GitAnalyzer, GitFileEntry, CommitInfo } from './git/types.js';
-import { SimpleGitAnalyzer } from './git/analyzer.js';
+import { snapshotFingerprint } from '@repo-archaeologist/core';
+import type { GitAnalyzer, CommitInfo } from './git/types.js';
+import {
+  parseSource,
+  parseTsconfigPaths,
+  aliasesFromPaths,
+  resolvePathAlias,
+  isTsJsFile,
+  type PathAlias,
+} from './languages/index.js';
+import {
+  detectModulePath,
+  isSkippedPath,
+  pathToModuleId,
+  type WorkspacePackage,
+} from './module-identity.js';
 
-const MODULE_ROOTS = ['src', 'lib', 'packages', 'apps', 'internal', 'pkg', 'cmd', 'crates'];
+interface FileParse {
+  path: string;
+  modulePath: string;
+  loc: number;
+  exports: string[];
+  specifiers: string[];
+  reExports: string[];
+}
 
 interface ParsedModule {
-  id: string;
-  name: string;
   path: string;
+  name: string;
+  packageName?: string;
   files: string[];
-  linesOfCode: number;
+  loc: number;
   symbols: string[];
-  imports: Set<string>;
+  specifiers: string[];
 }
+
+const SOURCE_EXT = ['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs'];
 
 export class SnapshotBuilder {
   constructor(private git: GitAnalyzer) {}
 
   async buildSnapshot(commit: CommitInfo): Promise<Snapshot> {
     const files = await this.git.getFilesAtCommit(commit.hash);
-    const sourceFiles = files.filter((f) => (this.git as SimpleGitAnalyzer).isSourceFile?.(f.path) ?? isSourceFile(f.path));
+    const sourceFiles = files
+      .map((f) => f.path)
+      .filter((p) => isTsJsFile(p) && !isSkippedPath(p));
 
-    const modules = await this.extractModules(commit.hash, sourceFiles);
-    const dependencies = this.buildDependencyGraph(modules);
+    const workspaces = await this.loadWorkspaces(commit.hash, files.map((f) => f.path));
+    const aliases = await this.loadAliases(commit.hash);
+
+    const parsedFiles: FileParse[] = [];
+    for (const filePath of sourceFiles) {
+      const modulePath = detectModulePath(filePath, workspaces);
+      if (!modulePath) continue;
+      const content = await this.git.getFileContentAtCommit(commit.hash, filePath);
+      if (!content || content.length > 250_000) {
+        parsedFiles.push({
+          path: filePath,
+          modulePath,
+          loc: content ? content.split('\n').length : 0,
+          exports: [],
+          specifiers: [],
+          reExports: [],
+        });
+        continue;
+      }
+      const parsed = parseSource(filePath, content);
+      parsedFiles.push({
+        path: filePath,
+        modulePath,
+        loc: content.split('\n').length,
+        exports: parsed?.exports ?? [],
+        specifiers: (parsed?.imports ?? [])
+          .filter((i) => !i.isTypeOnly)
+          .map((i) => i.specifier),
+        reExports: parsed?.reExports ?? [],
+      });
+    }
+
+    const modules = this.groupModules(parsedFiles, workspaces);
+    const fileToModule = new Map(parsedFiles.map((f) => [f.path, f.modulePath]));
+    const dependencies = this.buildDependencyGraph(parsedFiles, modules, fileToModule, aliases, workspaces);
 
     const totalLines = modules.reduce((sum, m) => sum + m.linesOfCode, 0);
-
-    return {
+    const snapshot: Snapshot = {
       id: `snap-${commit.shortHash}`,
       commit: commit.hash,
       shortCommit: commit.shortHash,
       timestamp: commit.date,
       message: commit.message,
       author: commit.author,
-      modules: modules.map(({ imports: _, ...rest }) => rest),
+      modules,
       dependencies,
       totalFiles: sourceFiles.length,
       totalLines,
+      reconstructedFrom: 'git+typescript-ast',
+      fingerprint: '',
     };
+    snapshot.fingerprint = snapshotFingerprint(snapshot);
+    return snapshot;
   }
 
-  private async extractModules(commit: string, files: GitFileEntry[]): Promise<Array<ModuleNode & { imports: Set<string> }>> {
-    const moduleMap = new Map<string, ParsedModule>();
+  private async loadWorkspaces(commit: string, allFiles: string[]): Promise<WorkspacePackage[]> {
+    const packageFiles = allFiles.filter((p) => p.endsWith('package.json') && !isSkippedPath(p));
+    const workspaces: WorkspacePackage[] = [];
+
+    for (const pkgFile of packageFiles) {
+      const content = await this.git.getFileContentAtCommit(commit, pkgFile);
+      if (!content) continue;
+      try {
+        const json = JSON.parse(content) as { name?: string };
+        const dir = path.dirname(pkgFile);
+        if (dir === '.' || dir === '') continue;
+        workspaces.push({ dir, name: json.name ?? path.basename(dir) });
+      } catch {
+        // ignore malformed package.json
+      }
+    }
+    return workspaces;
+  }
+
+  private async loadAliases(commit: string): Promise<PathAlias[]> {
+    const content = await this.git.getFileContentAtCommit(commit, 'tsconfig.json');
+    if (!content) return [];
+    try {
+      const paths = parseTsconfigPaths(content);
+      return aliasesFromPaths(paths);
+    } catch {
+      return [];
+    }
+  }
+
+  private groupModules(files: FileParse[], workspaces: WorkspacePackage[]): ModuleNode[] {
+    const map = new Map<string, ParsedModule>();
+    const wsByDir = new Map(workspaces.map((w) => [w.dir, w.name]));
 
     for (const file of files) {
-      const modulePath = detectModulePath(file.path);
-      if (!modulePath) continue;
-
-      const moduleId = modulePath.replace(/\//g, '-');
-      if (!moduleMap.has(moduleId)) {
-        const parts = modulePath.split('/');
-        moduleMap.set(moduleId, {
-          id: moduleId,
-          name: parts[parts.length - 1],
-          path: modulePath,
+      if (!map.has(file.modulePath)) {
+        const parts = file.modulePath.split('/');
+        map.set(file.modulePath, {
+          path: file.modulePath,
+          name: parts[parts.length - 1] ?? file.modulePath,
+          packageName: wsByDir.get(file.modulePath),
           files: [],
-          linesOfCode: 0,
+          loc: 0,
           symbols: [],
-          imports: new Set(),
+          specifiers: [],
         });
       }
-
-      const mod = moduleMap.get(moduleId)!;
+      const mod = map.get(file.modulePath)!;
       mod.files.push(file.path);
-
-      const content = await this.git.getFileContentAtCommit(commit, file.path);
-      if (content) {
-        mod.linesOfCode += content.split('\n').length;
-        const { symbols, imports } = parseSourceFile(content, file.path);
-        mod.symbols.push(...symbols);
-        for (const imp of imports) {
-          mod.imports.add(imp);
-        }
-      }
+      mod.loc += file.loc;
+      mod.symbols.push(...file.exports);
     }
 
-    // Deduplicate symbols
-    for (const mod of moduleMap.values()) {
-      mod.symbols = [...new Set(mod.symbols)].slice(0, 20);
-    }
-
-    return [...moduleMap.values()].map((m) => ({
-      id: m.id,
-      name: m.name,
-      path: m.path,
-      fileCount: m.files.length,
-      linesOfCode: m.linesOfCode,
-      symbols: m.symbols,
-      imports: m.imports,
-    }));
+    return [...map.values()]
+      .filter((m) => isRealModule(m))
+      .map((m) => ({
+        id: pathToModuleId(m.path),
+        name: m.name,
+        path: m.path,
+        pathId: m.path,
+        packageName: m.packageName,
+        fileCount: m.files.length,
+        linesOfCode: m.loc,
+        symbols: [...new Set(m.symbols)].slice(0, 20),
+        files: m.files,
+      }));
   }
 
-  private buildDependencyGraph(modules: Array<ModuleNode & { imports: Set<string> }>): DependencyEdge[] {
-    const pathToId = new Map<string, string>();
-    for (const mod of modules) {
-      pathToId.set(mod.path, mod.id);
-      pathToId.set(mod.name, mod.id);
-    }
+  private buildDependencyGraph(
+    files: FileParse[],
+    modules: ModuleNode[],
+    fileToModule: Map<string, string>,
+    aliases: PathAlias[],
+    workspaces: WorkspacePackage[]
+  ): DependencyEdge[] {
+    const pathToId = new Map(modules.map((m) => [m.path, m.id]));
+    const packageToPath = new Map(
+      modules.filter((m) => m.packageName).map((m) => [m.packageName as string, m.path])
+    );
+    const weights = new Map<string, number>();
+    const vias = new Map<string, string[]>();
 
-    const edgeWeights = new Map<string, number>();
+    for (const file of files) {
+      const fromPath = file.modulePath;
+      const fromId = pathToId.get(fromPath);
+      if (!fromId) continue;
 
-    for (const mod of modules) {
-      for (const imp of mod.imports) {
-        const targetId = resolveImportToModule(imp, mod.path, pathToId, modules);
-        if (targetId && targetId !== mod.id) {
-          const key = `${mod.id}->${targetId}`;
-          edgeWeights.set(key, (edgeWeights.get(key) ?? 0) + 1);
-        }
+      for (const spec of file.specifiers) {
+        const resolved = resolveSpecifier(spec, file.path, aliases, packageToPath, fileToModule, workspaces);
+        if (!resolved) continue;
+        const toId = pathToId.get(resolved);
+        if (!toId || toId === fromId) continue;
+        const key = `${fromId}->${toId}`;
+        weights.set(key, (weights.get(key) ?? 0) + 1);
+        const listed = vias.get(key) ?? [];
+        if (!listed.includes(spec)) listed.push(spec);
+        vias.set(key, listed.slice(0, 4));
       }
     }
 
-    return [...edgeWeights.entries()].map(([key, weight]) => {
+    return [...weights.entries()].map(([key, weight]) => {
       const [from, to] = key.split('->');
-      return { from, to, weight };
+      return { from, to, weight, via: vias.get(key) };
     });
   }
 }
 
-function isSourceFile(path: string): boolean {
-  return /\.(ts|tsx|js|jsx|py|go|rs|java|kt|swift|rb|cs|cpp|c|vue|svelte)$/.test(path);
+function isRealModule(mod: ParsedModule): boolean {
+  if (mod.files.length === 0) return false;
+  if (mod.files.length === 1 && mod.symbols.length === 0 && mod.loc < 20) return false;
+  return true;
 }
 
-export function detectModulePath(filePath: string): string | null {
-  const normalized = filePath.replace(/\\/g, '/');
-
-  // Monorepo packages: packages/foo/src/...
-  const pkgMatch = normalized.match(/^packages\/([^/]+)/);
-  if (pkgMatch) return `packages/${pkgMatch[1]}`;
-
-  // Apps: apps/web/src/...
-  const appMatch = normalized.match(/^apps\/([^/]+)/);
-  if (appMatch) return `apps/${appMatch[1]}`;
-
-  // Standard src layout: src/agent/foo.ts -> src/agent
-  for (const root of MODULE_ROOTS) {
-    const rootPattern = new RegExp(`^${root}/([^/]+)`);
-    const match = normalized.match(rootPattern);
-    if (match) return `${root}/${match[1]}`;
-  }
-
-  // Top-level module dirs
-  const topMatch = normalized.match(/^([^/]+)\/[^/]+\.(ts|js|py|go|rs)$/);
-  if (topMatch && !['test', 'tests', 'docs', 'scripts', '.github'].includes(topMatch[1])) {
-    return topMatch[1];
-  }
-
-  return null;
-}
-
-export function parseSourceFile(content: string, filePath: string): { symbols: string[]; imports: string[] } {
-  const symbols: string[] = [];
-  const imports: string[] = [];
-
-  // Extract exports/classes/functions
-  const symbolPatterns = [
-    /export\s+(?:async\s+)?function\s+(\w+)/g,
-    /export\s+class\s+(\w+)/g,
-    /export\s+(?:const|let|var)\s+(\w+)/g,
-    /export\s+default\s+(?:class|function)?\s*(\w+)/g,
-    /class\s+(\w+)/g,
-    /def\s+(\w+)/g,
-    /func\s+(\w+)/g,
-    /pub\s+(?:async\s+)?fn\s+(\w+)/g,
-  ];
-
-  for (const pattern of symbolPatterns) {
-    let match;
-    while ((match = pattern.exec(content)) !== null) {
-      if (match[1] && !symbols.includes(match[1])) {
-        symbols.push(match[1]);
-      }
-    }
-  }
-
-  // Extract imports
-  const importPatterns = [
-    /import\s+.*?\s+from\s+['"]([^'"]+)['"]/g,
-    /import\s+['"]([^'"]+)['"]/g,
-    /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-    /from\s+(\S+)\s+import/g,
-  ];
-
-  for (const pattern of importPatterns) {
-    let match;
-    while ((match = pattern.exec(content)) !== null) {
-      const imp = match[1];
-      if (imp && !imp.startsWith('.') && !imp.startsWith('@/')) {
-        // External or absolute import - extract first segment
-        const segment = imp.split('/')[0].replace(/^@/, '');
-        if (segment && segment !== '.' && segment !== '..') {
-          imports.push(imp);
-        }
-      } else if (imp) {
-        imports.push(imp);
-      }
-    }
-  }
-
-  return { symbols: symbols.slice(0, 30), imports };
-}
-
-function resolveImportToModule(
-  importPath: string,
-  fromModulePath: string,
-  pathToId: Map<string, string>,
-  modules: ModuleNode[]
+export function resolveSpecifier(
+  spec: string,
+  fromFile: string,
+  aliases: PathAlias[],
+  packageToPath: Map<string, string>,
+  fileToModule: Map<string, string>,
+  workspaces: WorkspacePackage[]
 ): string | null {
-  // Relative import: ./foo -> resolve against fromModulePath
-  if (importPath.startsWith('.')) {
-    const fromDir = fromModulePath.split('/').slice(0, -1).join('/');
-    const resolved = resolveRelativePath(fromDir, importPath);
-    for (const mod of modules) {
-      if (mod.path.startsWith(resolved) || resolved.startsWith(mod.path)) {
-        return mod.id;
-      }
-    }
-    return null;
+  if (spec.startsWith('.')) {
+    const dir = path.dirname(fromFile);
+    const resolved = path.normalize(path.join(dir, spec)).replace(/^\.\//, '');
+    return moduleForResolvedPath(resolved, fileToModule, workspaces);
   }
 
-  // Absolute / package import
-  const segments = importPath.replace(/^@\//, '').split('/');
-  for (let len = segments.length; len > 0; len--) {
-    const candidate = segments.slice(0, len).join('/');
-    if (pathToId.has(candidate)) return pathToId.get(candidate)!;
+  if (packageToPath.has(spec)) return packageToPath.get(spec)!;
+  for (const [pkg, modulePath] of packageToPath) {
+    if (spec === pkg || spec.startsWith(`${pkg}/`)) return modulePath;
   }
 
-  // Match by module name
-  const firstSegment = segments[0];
-  if (pathToId.has(firstSegment)) return pathToId.get(firstSegment)!;
+  const aliased = resolvePathAlias(spec, aliases);
+  if (aliased) {
+    return moduleForResolvedPath(aliased, fileToModule, workspaces);
+  }
 
   return null;
 }
 
-function resolveRelativePath(from: string, relative: string): string {
-  const parts = from.split('/').filter(Boolean);
-  for (const segment of relative.split('/')) {
-    if (segment === '..') parts.pop();
-    else if (segment !== '.' && segment !== '') parts.push(segment.replace(/\.(ts|js|tsx|jsx)$/, ''));
+function moduleForResolvedPath(
+  resolved: string,
+  fileToModule: Map<string, string>,
+  workspaces: WorkspacePackage[]
+): string | null {
+  const candidates = expandResolved(resolved);
+  for (const candidate of candidates) {
+    const direct = fileToModule.get(candidate);
+    if (direct) return direct;
   }
-  return parts.join('/');
+  // A guessed directory is not a dependency target. Requiring a concrete
+  // source file keeps unresolved imports out of the reconstructed graph.
+  return null;
 }
+
+function expandResolved(resolved: string): string[] {
+  const stripped = resolved.replace(/\.(js|jsx|ts|tsx|mts|cts|mjs|cjs)$/, '');
+  const out: string[] = [resolved, stripped];
+  for (const ext of SOURCE_EXT) {
+    out.push(`${stripped}${ext}`);
+    out.push(`${stripped}/index${ext}`);
+  }
+  return out;
+}
+
+/** Back-compat for existing unit tests. */
+export function parseSourceFile(content: string, filePath: string): { symbols: string[]; imports: string[] } {
+  const parsed = parseSource(filePath, content);
+  return {
+    symbols: parsed?.exports ?? [],
+    imports: (parsed?.imports ?? []).map((i) => i.specifier),
+  };
+}
+
+export { detectModulePath };
