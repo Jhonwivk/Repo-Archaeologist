@@ -14,6 +14,7 @@
     "dev:server": "npm run dev -w @repo-archaeologist/server",
     "dev:web": "npm run dev -w @repo-archaeologist/web",
     "analyze": "npm run analyze -w @repo-archaeologist/engine",
+    "smoke:real": "npm run build && node scripts/real-world-smoke.mjs",
     "test": "npm run build && npm run test --workspaces --if-present",
     "start": "npm run start -w @repo-archaeologist/server"
   },

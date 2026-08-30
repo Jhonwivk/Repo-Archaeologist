@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { selectImportantCommits } from './commit-selector.js';
 import { ChangeDetector, summarizeDelta } from './change-detector.js';
 import { classifyEventType } from './event-clusterer.js';
-import { detectModulePath, parseSourceFile, resolveSpecifier } from './snapshot-builder.js';
+import { SnapshotBuilder, detectModulePath, parseSourceFile, resolveSpecifier } from './snapshot-builder.js';
 import { parseTsJs, resolvePathAlias, aliasesFromPaths } from './languages/ts-js.js';
 import { matchModules, pathToModuleId, stabilizeSnapshotIdentities } from './module-identity.js';
 import type { Snapshot, ModuleNode } from '@repo-archaeologist/core';
-import type { CommitInfo } from './git/types.js';
+import type { CommitInfo, GitAnalyzer } from './git/types.js';
 
 function mod(path: string, files: string[], symbols: string[] = []): ModuleNode {
   const name = path.split('/').pop() ?? path;
@@ -46,6 +46,34 @@ describe('snapshot-builder', () => {
   it('skips test files', () => {
     assert.equal(detectModulePath('src/agent/run.test.ts'), null);
     assert.equal(detectModulePath('src/__tests__/foo.ts'), null);
+  });
+
+  it('models a root-level package entry point as a module', async () => {
+    const files = new Map([
+      ['package.json', JSON.stringify({ name: 'single-file-package' })],
+      ['index.js', 'export default async function map() { return []; }\n'.repeat(20)],
+    ]);
+    const git: GitAnalyzer = {
+      clone: async () => {},
+      open: async () => {},
+      getDefaultBranch: async () => 'main',
+      getTotalCommits: async () => 1,
+      getCommits: async () => [],
+      getFilesAtCommit: async () => [...files.keys()].map((path) => ({ path, type: 'blob' as const })),
+      getFileContentAtCommit: async (_commit, filePath) => files.get(filePath) ?? null,
+      getDiffStats: async () => ({ files: [], insertions: 0, deletions: 0 }),
+      getNameStatus: async () => ({ added: [], deleted: [], modified: [], renamed: [], files: [] }),
+      cleanup: async () => {},
+    };
+    const commit: CommitInfo = {
+      hash: 'abc', shortHash: 'abc', date: '2026-01-01', message: 'initial', author: 'test', filesChanged: 2,
+    };
+
+    const snapshot = await new SnapshotBuilder(git).buildSnapshot(commit);
+
+    assert.equal(snapshot.modules.length, 1);
+    assert.equal(snapshot.modules[0].name, 'single-file-package');
+    assert.deepEqual(snapshot.modules[0].files, ['index.js']);
   });
 
   it('parses TypeScript exports via compiler API', () => {

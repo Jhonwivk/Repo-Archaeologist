@@ -48,6 +48,27 @@ npm run build
 npm start         # http://localhost:3001
 ```
 
+Container deployment:
+
+```bash
+docker build -t repo-archaeologist .
+docker run --rm -p 3001:3001 repo-archaeologist
+```
+
+The runtime image includes Git for live repository analysis, runs as the
+unprivileged `node` user, and exposes a Docker health check at `/api/health`.
+Set `PORT`, `HOST`, `DATA_DIR`, `MAX_CONCURRENT`, or `ANALYZE_TIMEOUT_MS` to
+override the production defaults.
+
+Run the opt-in, networked regression smoke suite against representative public
+repositories with:
+
+```bash
+npm run smoke:real
+```
+
+You can also pass one or more explicit GitHub repository URLs after `--`.
+
 ## How it works
 
 ```
