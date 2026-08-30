@@ -112,8 +112,10 @@ export class SnapshotBuilder {
       try {
         const json = JSON.parse(content) as { name?: string };
         const dir = path.dirname(pkgFile);
-        if (dir === '.' || dir === '') continue;
-        workspaces.push({ dir, name: json.name ?? path.basename(dir) });
+        workspaces.push({
+          dir,
+          name: json.name ?? (dir === '.' || dir === '' ? 'root' : path.basename(dir)),
+        });
       } catch {
         // ignore malformed package.json
       }
@@ -139,10 +141,11 @@ export class SnapshotBuilder {
     for (const file of files) {
       if (!map.has(file.modulePath)) {
         const parts = file.modulePath.split('/');
+        const packageName = wsByDir.get(file.modulePath);
         map.set(file.modulePath, {
           path: file.modulePath,
-          name: parts[parts.length - 1] ?? file.modulePath,
-          packageName: wsByDir.get(file.modulePath),
+          name: packageName ?? parts[parts.length - 1] ?? file.modulePath,
+          packageName,
           files: [],
           loc: 0,
           symbols: [],

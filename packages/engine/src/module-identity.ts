@@ -34,11 +34,15 @@ export function detectModulePath(filePath: string, workspaces: WorkspacePackage[
 
   const sorted = [...workspaces].sort((a, b) => b.dir.length - a.dir.length);
   for (const ws of sorted) {
+    if (ws.dir === '.' || ws.dir === '') continue;
     const prefix = ws.dir.endsWith('/') ? ws.dir : `${ws.dir}/`;
     if (normalized.startsWith(prefix) || normalized === ws.dir) {
       return ws.dir;
     }
   }
+
+  const rootWorkspace = sorted.find((ws) => ws.dir === '.' || ws.dir === '');
+  if (rootWorkspace && !normalized.includes('/')) return '.';
 
   const pkgMatch = normalized.match(/^(packages\/[^/]+)/);
   if (pkgMatch) return pkgMatch[1];

@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+**/dist
+**/.vite
+coverage
+data
+tmp
+.DS_Store
+.env*
